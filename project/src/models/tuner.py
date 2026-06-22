@@ -28,7 +28,7 @@ def tune_model(
     study.optimize(
         lambda trial: objective(trial, X_arr, y_arr, cv),
         n_trials=n_trials,
-        show_progress_bar=False,
+        show_progress_bar=True,
     )
 
     return ModelResult(
