@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# cache 
+project/cache
+
+# cursor
+.cursor
+.vscode
