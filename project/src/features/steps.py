@@ -310,3 +310,70 @@ def add_overnight_vol_5d(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
         overnight_ret.rolling(window, min_periods=window).std() * ANNUALIZATION
     )
     return out
+
+
+def add_qqq_ret_20d(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    qqq = _series_or_default(out, "qqq")
+    out["qqq_ret_20d"] = qqq.pct_change(window).shift(1).fillna(0.0)
+    return out
+
+
+def add_qqq_rv_20d(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    qqq = _series_or_default(out, "qqq")
+    qqq_ret = qqq.pct_change()
+    out["qqq_rv_20d"] = (
+        qqq_ret.rolling(window, min_periods=window).std() * ANNUALIZATION
+    ).shift(1)
+    return out
+
+
+def add_qqq_minus_spy_ret_20d(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    qqq = _series_or_default(out, "qqq")
+    spy = _series_or_default(out, "Close")
+    qqq_ret = qqq.pct_change(window)
+    spy_ret = spy.pct_change(window)
+    out["qqq_minus_spy_ret_20d"] = (qqq_ret - spy_ret).shift(1).fillna(0.0)
+    return out
+
+
+def add_vix_change_5d(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
+    out = df.copy()
+    vix = _series_or_default(out, "vix")
+    out["vix_change_5d"] = vix.diff(window).shift(1).fillna(0.0)
+    return out
+
+
+def add_vix_zscore_20d(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    vix = _series_or_default(out, "vix")
+    mean = vix.rolling(window, min_periods=window).mean()
+    std = vix.rolling(window, min_periods=window).std()
+    out["vix_zscore_20d"] = ((vix - mean) / std.replace(0, np.nan)).shift(1).fillna(0.0)
+    return out
+
+
+def add_max_drawdown_60d(df: pd.DataFrame, window: int = 60) -> pd.DataFrame:
+    out = df.copy()
+    close = _series_or_default(out, "Close")
+    roll_max = close.rolling(window, min_periods=window).max()
+    drawdown = close / roll_max - 1.0
+    out["max_drawdown_60d"] = drawdown.rolling(window, min_periods=window).min().shift(1)
+    return out
+
+
+def add_tlt_ret_20d(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    tlt = _series_or_default(out, "tlt")
+    out["tlt_ret_20d"] = tlt.pct_change(window).shift(1).fillna(0.0)
+    return out
+
+
+def add_irx_level(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["irx_level"] = _series_or_default(out, "irx").shift(1).fillna(0.0)
+    return out
+
+

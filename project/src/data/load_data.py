@@ -16,8 +16,11 @@ MARKET_TICKERS: dict[str, str] = {
     "^VVIX": "vvix",
     "^SKEW": "skew",
     "^TNX": "tnx",
+    "^IRX": "irx",
     "DX-Y.NYB": "dxy",
     "GC=F": "gold",
+    "QQQ": "qqq",
+    "TLT": "tlt",
 }
 
 

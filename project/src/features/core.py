@@ -43,6 +43,14 @@ from project.src.features.steps import (
     add_vix_change_1d,
     add_yang_zhang_rv,
     add_yield_change_1d,
+    add_qqq_ret_20d,
+    add_qqq_rv_20d,
+    add_qqq_minus_spy_ret_20d,
+    add_vix_change_5d,
+    add_vix_zscore_20d,
+    add_max_drawdown_60d,
+    add_tlt_ret_20d,
+    add_irx_level,
 )
 FeatureFn = Callable[[pd.DataFrame], pd.DataFrame]
 
@@ -92,6 +100,14 @@ DEFAULT_FEATURE_STEPS: list[FeatureStep] = [
     FeatureStep("overnight_ret", add_overnight_ret),
     FeatureStep("intraday_ret", add_intraday_ret),
     FeatureStep("overnight_vol_5d", add_overnight_vol_5d),
+    FeatureStep("qqq_ret_20d", add_qqq_ret_20d),
+    FeatureStep("qqq_rv_20d", add_qqq_rv_20d),
+    FeatureStep("qqq_minus_spy_ret_20d", add_qqq_minus_spy_ret_20d),
+    FeatureStep("vix_change_5d", add_vix_change_5d),
+    FeatureStep("vix_zscore_20d", add_vix_zscore_20d),
+    FeatureStep("max_drawdown_60d", add_max_drawdown_60d),
+    FeatureStep("tlt_ret_20d", add_tlt_ret_20d),
+    FeatureStep("irx_level", add_irx_level),
 ]
 
 FEATURE_REGISTRY: dict[str, FeatureStep] = {
