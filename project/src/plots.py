@@ -261,3 +261,21 @@ def plot_optuna_history(study, output_path: Path) -> None:
     plt.tight_layout()
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
+
+def plot_feature_correlation(df: pd.DataFrame, output_path: Path) -> None:
+    corr_matrix = df.corr()
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(
+        corr_matrix,
+        annot=True,
+        fmt=".2f",
+        cmap="coolwarm",
+        cbar=True,
+        square=True,
+        linewidths=0.5,
+        ax=ax,
+    )
+    ax.set_title("Feature Correlation Heatmap")
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=120)
+    plt.close(fig)

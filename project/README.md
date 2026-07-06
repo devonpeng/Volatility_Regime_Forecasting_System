@@ -455,3 +455,102 @@ feature_names = bundle["feature_names"]
 - `yfinance` 无法访问：使用 `--synthetic`，或依赖自动 fallback
 - 训练很慢：降低 `--n-trials`，先只跑一个模型（例如 `--models logistic`）
 - 结果不稳定：固定时间区间、固定特征选择、提高样本量
+
+
+# ML Experiment Workbench
+
+An interactive Streamlit application that wraps the RV (Realized Volatility) prediction pipeline into a multi-page workbench for FINS5557 Applied AI in Finance.
+
+## Quick Start
+
+```bash
+cd project
+uv run streamlit run app.py
+```
+
+The app opens at `http://localhost:8501` by default.
+
+## Prerequisites
+
+- Python ≥ 3.13
+- [uv](https://docs.astral.sh/uv/) for dependency management
+- A `.env` file with Gemini API credentials (optional, for LLM features):
+
+```
+LLM_API_KEY=your-google-api-key
+LLM_MODEL=gemini-3.5-flash
+```
+
+## Pages
+
+### Page 1 — Data & Feature Engineering
+
+1. Enter a ticker symbol (e.g. `SPY`), date range, or toggle synthetic data
+2. Click **Load Data** — head/tail preview appears
+3. Select which features to compute from the 36 available
+4. Click **Build Features** to generate the enriched DataFrame
+5. Optionally describe a new feature in natural language and click **Generate Feature with Gemini**
+6. Configure the label horizon (1–20 days) and method, then click **Build Dataset (X, y)**
+
+### Page 2 — Train/Test Split
+
+1. Adjust the train ratio slider (default 0.8)
+2. Click **Split Data** — time-ordered split with stats
+3. Configure cross-validation parameters (`n_splits`, `train_window_size`, `test_size`, `gap_size`)
+4. Click **Create CV Object** — split visualization appears
+
+### Page 3 — Model Training
+
+1. Select one or more models (logistic, XGBoost, LightGBM)
+2. Set the number of Optuna trials (default 10 for speed)
+3. Click **Train Models** — progress shown in real time
+4. Results table displays best AUC and hyperparameters per model
+
+### Page 4 — Evaluation & Insight
+
+1. Click **Compute OOF Predictions** — Brier score and log-loss metrics appear
+2. View ROC curve and predictions overlay charts
+3. Click **Compute Feature Importance** for a ranked bar chart
+4. Click **Generate LLM Report** for an AI-written diagnostic summary (falls back to rule-based if API key is missing)
+
+## Project Structure
+
+```
+project/
+├── app.py                          # Streamlit entry point
+├── src/
+│   ├── streamlit_app/              # Streamlit adapter layer (new)
+│   │   ├── session_manager.py      # Session state keys & helpers
+│   │   ├── plots.py                # Figure-returning plot wrappers
+│   │   ├── llm_helper.py           # Gemini feature gen & briefing
+│   │   └── pages/
+│   │       ├── data_feature.py     # Page 1
+│   │       ├── train_test.py       # Page 2
+│   │       ├── model_train.py      # Page 3
+│   │       └── evaluation.py       # Page 4
+│   ├── data/                       # Data loading (yfinance, synthetic)
+│   ├── features/                   # Feature engineering (36 steps)
+│   ├── models/                     # Model registry, Optuna tuner, evaluator
+│   ├── eval/                       # LLM briefing, regime analysis
+│   ├── metrics/                    # Brier, log-loss, Diebold-Mariano
+│   └── plots.py                    # Original disk-saving plot functions
+├── pyproject.toml
+└── .env                            # API keys (not committed)
+```
+
+## Key Design Decisions
+
+- **No modifications to existing modules** — all Streamlit logic lives in `src/streamlit_app/`
+- **Session state** connects pages; changing upstream data automatically clears downstream results
+- **`@st.cache_data`** on data loading and dataset building avoids redundant network calls
+- **LLM feature generation** uses `exec()` with restricted builtins (`pd`/`np` only)
+- **Optuna** defaults to 10 trials for interactive speed; increase as needed
+
+## Batch Pipeline (Original CLI)
+
+The original non-interactive pipeline is still available:
+
+```bash
+cd project
+uv run python -m project.main
+```

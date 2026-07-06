@@ -277,7 +277,13 @@ class RVPipeline:
                 self.model_results,
                 output_path=self.output_dir / "model_comparison.png",
             )
-
+        # Plot a corr heatmap of the features used in the best model
+        if self.selected_features and self.X is not None:
+            plot_module.plot_feature_correlation(
+                self.X[self.selected_features],
+                output_path=self.output_dir / "feature_correlation.png",
+            )
+        
         best_result = next(
             (r for r in self.model_results if r.name == self.best_model_name),
             None,
