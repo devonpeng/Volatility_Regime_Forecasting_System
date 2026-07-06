@@ -42,3 +42,32 @@ def add_volume_zscore(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     vol_std = out["Volume"].rolling(window, min_periods=window).std()
     out["volume_zscore"] = (out["Volume"] - vol_mean) / vol_std.replace(0, np.nan)
     return out
+
+
+def add_parkinson_rv(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    log_hl = np.log(out["High"] / out["Low"])
+    out["parkinson_rv"] = (
+        (log_hl ** 2 / (4 * np.log(2)))
+        .rolling(window, min_periods=window).mean()
+        .pow(0.5) * np.sqrt(252)
+    )
+    return out
+
+
+def add_abs_ret_lag1(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["abs_ret_lag1"] = out["ret_1d"].abs().shift(1)
+    return out
+
+
+def add_rv_ratio_5_20(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["rv_ratio_5_20"] = out["rv_hist_5d"] / out["rv_hist_20d"].replace(0, np.nan)
+    return out
+
+
+def add_vix_change_1d(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["vix_change_1d"] = out["vix"].diff().shift(1)
+    return out

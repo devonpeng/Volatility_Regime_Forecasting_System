@@ -9,12 +9,14 @@ from project.src.features.rv import compute_forward_rv
 from project.src.features.steps import (
     add_hl_range,
     add_ret_1d,
-    add_rv_hist_10d,
     add_rv_hist_20d,
     add_rv_hist_5d,
     add_volume_zscore,
+    add_parkinson_rv,
+    add_abs_ret_lag1,
+    add_rv_ratio_5_20,
+    add_vix_change_1d,
 )
-
 FeatureFn = Callable[[pd.DataFrame], pd.DataFrame]
 
 
@@ -30,9 +32,12 @@ DEFAULT_FEATURE_STEPS: list[FeatureStep] = [
     FeatureStep("ret_1d", add_ret_1d),
     FeatureStep("hl_range", add_hl_range),
     FeatureStep("rv_hist_5d", add_rv_hist_5d),
-    FeatureStep("rv_hist_10d", add_rv_hist_10d),
     FeatureStep("rv_hist_20d", add_rv_hist_20d),
     FeatureStep("volume_zscore", add_volume_zscore),
+    FeatureStep("parkinson_rv",  add_parkinson_rv),
+    FeatureStep("abs_ret_lag1",  add_abs_ret_lag1),
+    FeatureStep("rv_ratio_5_20", add_rv_ratio_5_20),
+    FeatureStep("vix_change_1d", add_vix_change_1d),
 ]
 
 FEATURE_REGISTRY: dict[str, FeatureStep] = {
@@ -105,7 +110,7 @@ def add_target_and_label(
 def build_dataset(
     df: pd.DataFrame,
     horizon: int = 5,
-    label_method: str = "median",
+    label_method: str ="expanding",
     feature_steps: list[FeatureStep] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     """Build feature matrix X, binary label y, and metadata for plotting."""
