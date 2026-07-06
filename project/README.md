@@ -214,6 +214,59 @@ print_report(report)
 - `features/steps.py`：每个 `add_`* 函数只负责新增一列
 - `features/core.py`：`FeatureStep` 注册表 + `apply_features()` 串联步骤
 
+### 当前默认 Feature 列表（已与代码同步）
+
+`features/core.py` 的 `DEFAULT_FEATURE_STEPS` 当前默认包含以下 36 个特征（按执行顺序）：
+
+`ret_1d`, `hl_range`, `rv_hist_5d`, `rv_hist_20d`, `gk_rv`, `rs_rv`, `yz_rv`, `volume_zscore`, `parkinson_rv`, `ewma_rv`, `downside_rv`, `vol_of_vol`, `rv_accel`, `ret_skew_20d`, `ret_kurt_20d`, `max_drawdown_20d`, `ret_autocorr_1_20d`, `abs_ret_lag1`, `rv_ratio_5_20`, `vix_level`, `vix_change_1d`, `vix_term_structure`, `vix_rv_spread`, `vvix_level`, `skew_index_level`, `yield_change_1d`, `dxy_change_1d`, `gold_ret_1d`, `day_of_week`, `is_month_end`, `is_quarter_end`, `dist_from_ma50`, `bb_width`, `overnight_ret`, `intraday_ret`, `overnight_vol_5d`
+
+其中：
+
+- 仅依赖标的自身 OHLCV 的特征可直接从主行情构建（如 `gk_rv` / `yz_rv` / `downside_rv`）。
+- 宏观/跨资产特征依赖 `load_data.py` 自动附加的市场上下文列：`vix`, `vix3m`, `vvix`, `skew`, `tnx`, `dxy`, `gold`。
+- 数据层会尝试拉取 `^VIX`, `^VIX3M`, `^VVIX`, `^SKEW`, `^TNX`, `DX-Y.NYB`, `GC=F`；若某个 ticker 缺失，会自动跳过，不阻塞训练流程。
+
+### Feature 含义速查表
+
+| Feature | 主要作用（干什么） | 计算来源（怎么来的） |
+|---|---|---|
+| `ret_1d` | 日收益率，最基础价格变化信号 | `Close.pct_change()` |
+| `hl_range` | 日内振幅，衡量当天价格波动区间 | `(High - Low) / Close` |
+| `rv_hist_5d` | 5 日历史已实现波动率（短期） | `ret_1d` 的 5 日滚动标准差年化 |
+| `rv_hist_20d` | 20 日历史已实现波动率（中期） | `ret_1d` 的 20 日滚动标准差年化 |
+| `gk_rv` | Garman-Klass 波动率，利用 OHLC 降噪 | `High/Low/Open/Close` 对数项组合后滚动均值年化 |
+| `rs_rv` | Rogers-Satchell 波动率，对趋势更稳健 | `log(H/O), log(L/O), log(C/O)` 组合后滚动均值年化 |
+| `yz_rv` | Yang-Zhang 波动率，考虑隔夜跳空 | 隔夜方差 + 开收方差 + RS 分量组合后年化 |
+| `volume_zscore` | 成交量异常程度（放量/缩量） | `Volume` 相对 20 日均值和标准差的 z-score |
+| `parkinson_rv` | Parkinson 波动率，高低价区间估计波动 | `log(High/Low)` 的滚动二阶矩年化 |
+| `ewma_rv` | 更重视近期冲击的波动率估计 | `ret_1d^2` 做 EWMA 后开方年化 |
+| `downside_rv` | 下行半方差，强调负收益风险 | 仅对负 `ret_1d` 平方做滚动均值后开方年化 |
+| `vol_of_vol` | 波动率的波动，识别状态稳定性 | `rv_hist_5d` 的 20 日滚动标准差 |
+| `rv_accel` | 波动率加速度，识别波动状态切换 | `rv_hist_5d - rv_hist_5d.shift(5)` |
+| `ret_skew_20d` | 收益偏度，识别左尾风险倾向 | `ret_1d` 的 20 日滚动偏度 |
+| `ret_kurt_20d` | 收益峰度，识别厚尾/极端波动风险 | `ret_1d` 的 20 日滚动峰度 |
+| `max_drawdown_20d` | 近期最深回撤，衡量尾部压力 | 20 日滚动最高价回撤，再取滚动最小值 |
+| `ret_autocorr_1_20d` | 收益一阶自相关，反映趋势/均值回复状态 | `ret_1d` 在 20 日窗口内计算 lag=1 自相关 |
+| `abs_ret_lag1` | 昨日绝对收益，短期冲击记忆 | `abs(ret_1d).shift(1)` |
+| `rv_ratio_5_20` | 短中期波动率相对强弱 | `rv_hist_5d / rv_hist_20d` |
+| `vix_level` | 隐含波动率水平 | `^VIX` 收盘值 |
+| `vix_change_1d` | 隐含波动率日变动 | `vix.diff().shift(1)` |
+| `vix_term_structure` | VIX 期限结构，识别恐慌/backwardation | `vix3m - vix` |
+| `vix_rv_spread` | 隐含-已实现波动率价差，均值回复信号 | `vix / 100 - rv_hist_20d` |
+| `vvix_level` | “波动率的波动率”水平 | `^VVIX` 收盘值 |
+| `skew_index_level` | 尾部风险溢价强弱 | `^SKEW` 收盘值 |
+| `yield_change_1d` | 利率冲击代理 | `tnx.diff().shift(1)` |
+| `dxy_change_1d` | 美元风险偏好代理 | `dxy.pct_change().shift(1)` |
+| `gold_ret_1d` | 避险资产变动代理 | `gold.pct_change().shift(1)` |
+| `day_of_week` | 周内日历效应 | 交易日 `dayofweek` |
+| `is_month_end` | 月末效应标记 | 日期是否月末（0/1） |
+| `is_quarter_end` | 季末效应标记 | 日期是否季末（0/1） |
+| `dist_from_ma50` | 趋势偏离程度 | `(Close - MA50) / MA50` |
+| `bb_width` | 布林带宽度，波动状态非线性表达 | `4 * rolling_std(Close,20) / rolling_mean(Close,20)` |
+| `overnight_ret` | 隔夜收益，捕捉跳空信息 | `log(Open / Close.shift(1))` |
+| `intraday_ret` | 日内收益，分离日内波动驱动 | `log(Close / Open)` |
+| `overnight_vol_5d` | 隔夜波动率（短期） | `overnight_ret` 的 5 日滚动标准差年化 |
+
 ### 方式 A：新增一个 feature step（推荐）
 
 1. 在 `features/steps.py` 添加函数：
@@ -402,4 +455,3 @@ feature_names = bundle["feature_names"]
 - `yfinance` 无法访问：使用 `--synthetic`，或依赖自动 fallback
 - 训练很慢：降低 `--n-trials`，先只跑一个模型（例如 `--models logistic`）
 - 结果不稳定：固定时间区间、固定特征选择、提高样本量
-
