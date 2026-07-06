@@ -13,6 +13,7 @@ def load_run_data(
 ) -> tuple[np.ndarray, np.ndarray, int, pd.DataFrame, str, dict[str, Any]]:
     y_path = run_dir / "data" / "y.csv"
     oof_path = run_dir / "data" / "oof_predictions.csv"
+    x_path = run_dir / "data" / "X.csv"
     pipeline_path = run_dir / "config" / "pipeline.json"
 
     if not y_path.exists() or not oof_path.exists():
@@ -41,4 +42,8 @@ def load_run_data(
     valid_df = oof_df.loc[valid].reset_index(drop=True)
     valid_df["y"] = y_valid
     valid_df["model_proba"] = model_proba
+    if x_path.exists():
+        x_df = pd.read_csv(x_path)
+        if "rv_hist_5d" in x_df.columns:
+            valid_df["rv_hist_5d"] = x_df.loc[valid, "rv_hist_5d"].to_numpy(dtype=float)
     return y_valid, model_proba, horizon, valid_df, best_model_name, pipeline_config

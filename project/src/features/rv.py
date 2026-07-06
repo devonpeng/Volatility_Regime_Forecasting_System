@@ -7,8 +7,8 @@ def compute_forward_rv(
     horizon: int = 5,
     annualization: float = np.sqrt(252),
 ) -> pd.Series:
-    """Compute forward-looking realized volatility over `horizon` days."""
-    sq_returns = returns.pow(2)
+    """Compute strict forward-looking RV over `horizon` days (t+1 ... t+horizon)."""
+    sq_returns = returns.pow(2).shift(-1)
     future_mean_sq = (
         sq_returns[::-1]
         .rolling(window=horizon, min_periods=horizon)

@@ -52,6 +52,7 @@ class RVPipeline:
         use_synthetic: bool = False,
         label_method: str = "median",
         feature_selection: str | None = None,
+        nested_feature_selection: bool = False,
         top_k_features: int = 5,
         n_splits: int = 5,
         train_window_size: int = 252,
@@ -69,6 +70,7 @@ class RVPipeline:
         self.use_synthetic = use_synthetic
         self.label_method = label_method
         self.feature_selection = feature_selection
+        self.nested_feature_selection = nested_feature_selection
         self.top_k_features = top_k_features
         self.n_splits = n_splits
         self.train_window_size = train_window_size
@@ -106,6 +108,7 @@ class RVPipeline:
             "use_synthetic": self.use_synthetic,
             "label_method": self.label_method,
             "feature_selection": self.feature_selection,
+            "nested_feature_selection": self.nested_feature_selection,
             "top_k_features": self.top_k_features,
             "random_state": self.random_state,
         }
@@ -141,6 +144,12 @@ class RVPipeline:
     def run_feature_selection(self) -> FeatureSelectionResult | None:
         """Select features using tree top-k, lasso, or t-test."""
         if self.feature_selection is None:
+            return None
+        if self.nested_feature_selection:
+            print(
+                "Feature selection: nested mode enabled, "
+                "skip global pre-selection and fit selector within each fold."
+            )
             return None
 
         if self.X is None or self.y is None:
@@ -211,6 +220,9 @@ class RVPipeline:
             self.y,
             self.cv,
             random_state=self.random_state,
+            feature_selection=self.feature_selection,
+            top_k_features=self.top_k_features,
+            nested_feature_selection=self.nested_feature_selection,
         )
         self.oof_proba_full = oof_full
         self.oof_proba = oof_valid
@@ -342,6 +354,10 @@ class RVPipeline:
             self.y,
             self.cv,
             n_trials=self.n_trials,
+            feature_selection=self.feature_selection,
+            top_k_features=self.top_k_features,
+            nested_feature_selection=self.nested_feature_selection,
+            random_state=self.random_state,
         )
 
         best = max(self.model_results, key=lambda r: r.best_auc)

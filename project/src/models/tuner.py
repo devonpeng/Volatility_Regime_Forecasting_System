@@ -15,6 +15,10 @@ def tune_model(
     y: pd.Series,
     cv: TimeSeriesSplitWithPurge,
     n_trials: int = 30,
+    feature_selection: str | None = None,
+    top_k_features: int = 5,
+    nested_feature_selection: bool = False,
+    random_state: int = 42,
 ) -> ModelResult:
     if name not in MODEL_REGISTRY:
         raise ValueError(f"Unknown model: {name}. Choose from {list(MODEL_REGISTRY)}")
@@ -26,7 +30,16 @@ def tune_model(
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction="maximize")
     study.optimize(
-        lambda trial: objective(trial, X_arr, y_arr, cv),
+        lambda trial: objective(
+            trial,
+            X_arr,
+            y_arr,
+            cv,
+            feature_names=list(X.columns),
+            feature_selection=feature_selection if nested_feature_selection else None,
+            top_k_features=top_k_features,
+            random_state=random_state,
+        ),
         n_trials=n_trials,
         show_progress_bar=True,
     )
@@ -60,9 +73,25 @@ def tune_models(
     y: pd.Series,
     cv: TimeSeriesSplitWithPurge,
     n_trials: int = 30,
+    feature_selection: str | None = None,
+    top_k_features: int = 5,
+    nested_feature_selection: bool = False,
+    random_state: int = 42,
 ) -> list[ModelResult]:
     results: list[ModelResult] = []
     for name in names:
         print(f"Tuning model: {name} ({n_trials} trials)...")
-        results.append(tune_model(name, X, y, cv, n_trials=n_trials))
+        results.append(
+            tune_model(
+                name,
+                X,
+                y,
+                cv,
+                n_trials=n_trials,
+                feature_selection=feature_selection,
+                top_k_features=top_k_features,
+                nested_feature_selection=nested_feature_selection,
+                random_state=random_state,
+            )
+        )
     return results

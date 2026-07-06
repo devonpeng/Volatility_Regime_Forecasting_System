@@ -24,6 +24,7 @@ def main(args: argparse.Namespace) -> None:
         use_synthetic=args.synthetic,
         label_method=args.label_method,
         feature_selection=args.feature_selection,
+        nested_feature_selection=args.nested_feature_selection,
         top_k_features=args.top_k_features,
         n_splits=args.n_splits,
         train_window_size=args.train_window,
@@ -78,6 +79,15 @@ if __name__ == "__main__":
         choices=[*SELECTOR_REGISTRY.keys(), "none"],
         default=None,
         help="Feature selection method; omit to skip selection",
+    )
+    parser.add_argument(
+        "--nested-feature-selection",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable per-fold nested feature selection in CV/OOF. "
+            "When enabled, global pre-selection is skipped."
+        ),
     )
     parser.add_argument("--top-k-features", type=int, default=5)
     parser.add_argument("--n-splits", type=int, default=5)

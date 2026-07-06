@@ -27,7 +27,15 @@ def fetch_vix_ma_series(
         raise ValueError("Failed to fetch ^VIX data from yfinance (empty result)")
     if "Close" not in vix_df.columns:
         raise ValueError("^VIX data does not contain Close column")
-    vix_close = vix_df["Close"].astype(float)
+    vix_close_raw = vix_df["Close"]
+    if isinstance(vix_close_raw, pd.DataFrame):
+        if vix_close_raw.shape[1] != 1:
+            raise ValueError(
+                f"^VIX Close has unexpected shape {vix_close_raw.shape}; expected single column"
+            )
+        vix_close = vix_close_raw.iloc[:, 0].astype(float)
+    else:
+        vix_close = vix_close_raw.astype(float)
     vix_ma = vix_close.rolling(window=ma_window, min_periods=10).mean().bfill().ffill()
     return pd.Series(vix_ma, name="vix_ma30")
 
@@ -37,7 +45,7 @@ def build_macro_regime_labels(
     pipeline_config: dict[str, Any],
     *,
     ma_window: int = 30,
-) -> tuple[pd.Series, float, str]:
+) -> tuple[pd.Series, float, str, dict[str, Any]]:
     if "Date" not in oof_valid_df.columns:
         raise ValueError("oof_predictions.csv must contain Date for VIX regime split")
     start_date = str(pipeline_config.get("start_date", ""))
@@ -57,7 +65,14 @@ def build_macro_regime_labels(
             raise ValueError("Unable to align fetched VIX series to OOF validation dates")
         macro_indicator = pd.Series(vix_for_oof.to_numpy(), index=oof_valid_df.index)
         indicator_name = "vix_ma30_from_yfinance"
-    except Exception:
+        indicator_meta: dict[str, Any] = {
+            "used_fallback": False,
+            "reason": None,
+            "source_symbol": "^VIX",
+            "construction": "close_rolling_mean",
+            "ma_window": ma_window,
+        }
+    except Exception as exc:
         if "Close" not in oof_valid_df.columns:
             raise ValueError(
                 "VIX fetch failed and no Close column available for fallback regime split"
@@ -68,6 +83,15 @@ def build_macro_regime_labels(
         macro_indicator = hist_vol_30.rolling(window=ma_window, min_periods=10).mean()
         macro_indicator = macro_indicator.bfill().ffill()
         indicator_name = "fallback_rolling_volatility_ma30_from_close"
+        indicator_meta = {
+            "used_fallback": True,
+            "reason": str(exc),
+            "source_symbol": "oof_valid_df.Close",
+            "construction": "annualized_close_return_volatility_then_ma",
+            "annualization_factor": 252.0,
+            "vol_window": 30,
+            "ma_window": ma_window,
+        }
 
     threshold = float(macro_indicator.median())
     regimes = pd.Series(
@@ -75,7 +99,7 @@ def build_macro_regime_labels(
         index=oof_valid_df.index,
         name="Regime",
     )
-    return regimes, threshold, indicator_name
+    return regimes, threshold, indicator_name, indicator_meta
 
 
 def group_confusion_matrices(

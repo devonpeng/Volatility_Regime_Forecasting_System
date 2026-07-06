@@ -157,3 +157,29 @@ def select_features(
         scores=selector.get_scores(),
         X_selected=X_selected,
     )
+
+
+def select_features_on_fold(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame | None,
+    *,
+    method: str,
+    top_k: int = 5,
+    random_state: int = 42,
+    **kwargs,
+) -> tuple[pd.DataFrame, pd.DataFrame | None, FeatureSelectionResult]:
+    """
+    Fit selector on one train fold, then transform train/val with selected columns.
+    """
+    result = select_features(
+        X_train,
+        y_train,
+        method=method,
+        top_k=top_k,
+        random_state=random_state,
+        **kwargs,
+    )
+    X_train_selected = result.X_selected
+    X_val_selected = X_val[result.selected_features].copy() if X_val is not None else None
+    return X_train_selected, X_val_selected, result
