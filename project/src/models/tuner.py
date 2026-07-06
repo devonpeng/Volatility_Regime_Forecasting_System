@@ -31,6 +31,21 @@ def tune_model(
         show_progress_bar=True,
     )
 
+    completed = [
+        t
+        for t in study.trials
+        if t.state == optuna.trial.TrialState.COMPLETE
+        and t.value is not None
+        and np.isfinite(t.value)
+    ]
+    if not completed:
+        return ModelResult(
+            name=name,
+            best_auc=0.5,
+            best_params={},
+            study=study,
+        )
+
     return ModelResult(
         name=name,
         best_auc=float(study.best_value),

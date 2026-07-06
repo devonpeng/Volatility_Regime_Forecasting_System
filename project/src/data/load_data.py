@@ -10,6 +10,16 @@ import yfinance as yf
 from project.src.data.synthetic import generate_ohlcv
 from project.src.utils.cache import get_data_dir
 
+MARKET_TICKERS: dict[str, str] = {
+    "^VIX": "vix",
+    "^VIX3M": "vix3m",
+    "^VVIX": "vvix",
+    "^SKEW": "skew",
+    "^TNX": "tnx",
+    "DX-Y.NYB": "dxy",
+    "GC=F": "gold",
+}
+
 
 def yf_retry(func, max_retries=3, base_delay=2.0):
     """Execute a yfinance call with exponential backoff on rate limits."""
@@ -88,51 +98,68 @@ def get_data(
     return _get_YFin_data_online(symbol, start_date, end_date)
 
 
-def attach_vix(
+def _download_close_series(
+    ticker: str,
+    alias: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame | None:
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    end_inclusive = (end_dt + relativedelta(days=1)).strftime("%Y-%m-%d")
+    raw = yf_retry(
+        lambda: yf.download(
+            ticker,
+            start=start_date,
+            end=end_inclusive,
+            progress=False,
+            auto_adjust=True,
+        )
+    )
+    if raw.empty:
+        return None
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+
+    series = raw[["Close"]].copy()
+    series.columns = [alias]
+    series = series.reset_index()
+    series.rename(columns={series.columns[0]: "Date"}, inplace=True)
+    series["Date"] = pd.to_datetime(series["Date"])
+    if series["Date"].dt.tz is not None:
+        series["Date"] = series["Date"].dt.tz_localize(None)
+    return series[["Date", alias]]
+
+
+def attach_market_context(
     df: pd.DataFrame,
     start_date: str,
     end_date: str,
 ) -> pd.DataFrame:
+    out = df.copy()
     try:
-        from datetime import datetime
-        from dateutil.relativedelta import relativedelta
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        end_inclusive = (end_dt + relativedelta(days=1)).strftime("%Y-%m-%d")
+        attached_cols: list[str] = []
+        for ticker, alias in MARKET_TICKERS.items():
+            try:
+                series = _download_close_series(ticker, alias, start_date, end_date)
+                if series is None:
+                    print(f"[warn] {ticker} data empty, skipping {alias}")
+                    continue
+                out = out.merge(series, on="Date", how="left")
+                attached_cols.append(alias)
+            except Exception as sub_exc:
+                print(f"[warn] Failed to fetch {ticker} ({sub_exc}), skipping {alias}")
 
-        vix_raw = yf_retry(
-            lambda: yf.download(
-                "^VIX",
-                start=start_date,
-                end=end_inclusive,
-                progress=False,
-                auto_adjust=True,
+        if attached_cols:
+            coverage = ", ".join(
+                f"{col}:{int(out[col].notna().sum())}" for col in attached_cols
             )
-        )
-
-        if vix_raw.empty:
-            print("[warn] VIX data empty, skipping vix column")
-            return df
-
-        if isinstance(vix_raw.columns, pd.MultiIndex):
-            vix_raw.columns = vix_raw.columns.get_level_values(0)
-
-        vix_series = vix_raw[["Close"]].copy()
-        vix_series.columns = ["vix"]
-        vix_series = vix_series.reset_index()
-        vix_series.rename(columns={vix_series.columns[0]: "Date"}, inplace=True)
-        vix_series["Date"] = pd.to_datetime(vix_series["Date"])
-
-        if vix_series["Date"].dt.tz is not None:
-            vix_series["Date"] = vix_series["Date"].dt.tz_localize(None)
-
-        out = df.merge(vix_series[["Date", "vix"]], on="Date", how="left")
-        print(f"[info] VIX attached: {out['vix'].notna().sum()} rows with data")
+            print(f"[info] Market context attached ({coverage})")
+        else:
+            print("[warn] No market context series attached")
         return out
-
     except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        print(f"[warn] VIX fetch failed ({exc}), skipping vix column")
+        print(f"[warn] market context fetch failed ({exc}), skipping extra columns")
         return df
 
 
@@ -144,7 +171,7 @@ def get_data_with_fallback(
 ) -> pd.DataFrame:
     if use_synthetic:
         df = generate_ohlcv(symbol, start_date, end_date)
-        return attach_vix(df, start_date, end_date)
+        return attach_market_context(df, start_date, end_date)
 
     try:
         df = get_data(symbol, start_date, end_date)
@@ -152,4 +179,4 @@ def get_data_with_fallback(
         print(f"[warn] yfinance failed ({exc}), using synthetic data")
         df = generate_ohlcv(symbol, start_date, end_date)
 
-    return attach_vix(df, start_date, end_date)
+    return attach_market_context(df, start_date, end_date)
