@@ -226,3 +226,5 @@ project/cache
 .vscode
 .codex
 .agents
+
+project/uv.lock
