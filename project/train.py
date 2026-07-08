@@ -32,6 +32,7 @@ def main(args: argparse.Namespace):
         gap_size=args.gap_size,
         output_dir=args.output_dir,
         force_rebuild_features=args.force_rebuild_features,
+        early_stop_patience=args.early_stopping,
     )
 
     result = pipeline.run()
@@ -52,7 +53,7 @@ def main(args: argparse.Namespace):
     for model_result in sorted(result.model_results, key=lambda r: r.best_auc, reverse=True):
         print(f"  {model_result.name:10s}  AUC={model_result.best_auc:.4f}")
     print(f"\nRun dir     : {result.run_dir}")
-    print(f"Plots dir   : {result.plot_dir}")
+    print(f"Plots dir     : {result.plot_dir}")
     return result
 
 
@@ -106,6 +107,13 @@ if __name__ == "__main__":
         "--force-rebuild-features",
         action="store_true",
         help="Ignore shared dataset cache and rebuild/save full features",
+    )
+    parser.add_argument(
+        "--early-stop",
+        type=int,
+        default=5,
+        help="Trial-level early stopping patience: terminate a trial if "
+             "no fold improves over best for this many consecutive folds (default 5).",
     )
     args = parser.parse_args()
     if args.feature_selection == "none":

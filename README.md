@@ -159,9 +159,9 @@ uv run python train.py \
   --end 2025-12-31 \
   --models logistic xgb lgbm \
   --n-trials 30 \
+  --early-stop 5 \          # trial-level early stopping patience (consecutive non-improving folds before prune)
   --feature-selection lasso \
-  --top-k-features 12 \ 
-  ... // see src/main.py
+  --top-k-features 12
 ```
 
 If `yfinance` fails, the pipeline automatically falls back to synthetic data.
@@ -883,6 +883,20 @@ Each model is tuned with Optuna using time-series cross-validation.
 
 The default optimization objective is AUC.
 
+### Optuna Pruning & Trial-Level Early Stopping
+
+The pipeline uses **Optuna's HyperbandPruner** combined with a custom **patience pruner** (`_PatiencePruner`). Together they provide two layers of early termination to save compute:
+
+1. **Per-fold pruning (HyperbandPruner)** — after each fold completes inside a trial, the per-fold AUC is reported via `trial.report()` and checked against `should_prune()`. Trials whose intermediate scores fall below the resource-adapted threshold are aborted immediately. This enables successive halving across the CV folds within a single trial.
+
+2. **Per-trial patience stopping (`--early-stop N`)** — a custom `_PatiencePruner` monitors the sequence of intermediate values across all completed folds. If the best score seen so far has not been improved upon for `N` consecutive folds (default 5), the trial is pruned. This prevents wasting computation on trials that consistently underperform relative to the running optimum.
+
+Both mechanisms are controlled through the CLI parameter `--early-stop N`:
+
+| Parameter | Description |
+|---|---|
+| `--early-stop` | Number of consecutive folds without improvement before terminating a trial (default: 5). Set to 0 or 1 for aggressive pruning; higher values allow more exploration at the cost of runtime. |
+
 ### Example
 
 ```bash
@@ -891,13 +905,14 @@ uv run python train.py \
   --start 2018-01-01 \
   --end 2024-12-31 \
   --models logistic xgb lgbm \
-  --n-trials 30
+  --n-trials 30 \
+  --early-stop 5
 ```
 
 During training, the pipeline:
 
 1. Builds cross-validation splits
-2. Runs Optuna trials for each model
+2. Runs Optuna trials for each model with pruning
 3. Evaluates each trial using out-of-fold validation
 4. Selects the best model
 5. Fits the best model on the available training data
@@ -937,6 +952,8 @@ uv run python train.py \
 ```
 
 The gap helps reduce look-ahead leakage, especially because the target uses forward realized volatility.
+
+> **Note:** When `n_splits > 10`, the pipeline emits a `UserWarning` indicating that training time will increase significantly. Consider reducing to 5–10 splits unless you have sufficient compute budget.
 ![](./example_runs/plots/cv_splits.png)
 
 ---
