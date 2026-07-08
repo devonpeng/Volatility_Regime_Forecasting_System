@@ -1,10 +1,29 @@
 import lightgbm as lgb
 import numpy as np
 import optuna
+from io import StringIO
+from contextlib import redirect_stderr
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import RobustScaler
 
 from project.src.data.spliter import TimeSeriesSplitWithPurge
+
+
+def _fit_model_with_warn_once(model, X, y=None, eval_set=None, callbacks=None):
+    """Fit LightGBM model; suppress repeated split warnings during training,
+    then print any collected warnings exactly once after fitting."""
+    log = StringIO()
+    with redirect_stderr(log):
+        model.fit(X, y, eval_set=eval_set, callbacks=callbacks)
+
+    text = log.getvalue()
+    if "No further splits with positive gain" in text:
+        lines = [line.strip() for line in text.splitlines()
+                 if "No further splits with positive gain" in line]
+        unique_lines = list(dict.fromkeys(lines))
+        if unique_lines:
+            print(f"[LightGBM] No further splits warning (suppressed duplicates):\n" + "\n".join(unique_lines))
+    return model
 
 
 def objective_lgbm_classifier(
@@ -43,8 +62,10 @@ def objective_lgbm_classifier(
 
         callbacks = [lgb.callback.early_stopping(stopping_rounds=50)]
         model = lgb.LGBMClassifier(**lgbm_params)
-        model.fit(
-            X_train_scaled, y_train,
+        model = _fit_model_with_warn_once(
+            model=model,
+            X=X_train_scaled,
+            y=y_train,
             eval_set=[(X_val_scaled, y_val)],
             callbacks=callbacks,
         )

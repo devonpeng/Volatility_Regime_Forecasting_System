@@ -2,6 +2,8 @@ import lightgbm as lgb
 import numpy as np
 import optuna
 import pandas as pd
+from io import StringIO
+from contextlib import redirect_stderr
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import RobustScaler
 
@@ -9,6 +11,32 @@ from project.src.data.spliter import TimeSeriesSplitWithPurge
 from project.src.features.selection import select_features_on_fold
 
 _ES_THRESHOLD = 5000
+
+
+def _train_with_warn_once(params, dtrain, valid_sets=None, num_boost_round=100, callbacks=None):
+    """Train LightGBM model; suppress repeated split warnings during training,
+    then print any collected warnings exactly once after training."""
+    effective_params = dict(params)
+    effective_params["verbose"] = -1
+
+    log = StringIO()
+    with redirect_stderr(log):
+        model = lgb.train(
+            params=effective_params,
+            train_set=dtrain,
+            valid_sets=valid_sets,
+            num_boost_round=num_boost_round,
+            callbacks=callbacks,
+        )
+
+    text = log.getvalue()
+    if "No further splits with positive gain" in text:
+        lines = [line.strip() for line in text.splitlines()
+                 if "No further splits with positive gain" in line]
+        unique_lines = list(dict.fromkeys(lines))  # preserve order, deduplicate
+        if unique_lines:
+            print(f"[LightGBM] No further splits warning (suppressed duplicates):\n" + "\n".join(unique_lines))
+    return model
 
 
 def objective_lgbm_classifier(
@@ -75,13 +103,12 @@ def objective_lgbm_classifier(
             # es 轮数从 50 降到 30，更快终止过拟合的训练
             callbacks.append(lgb.callback.early_stopping(stopping_rounds=30))
 
-        gbm = lgb.train(
+        gbm = _train_with_warn_once(
             params=lgbm_params,
-            train_set=dtrain,
+            dtrain=dtrain,
             valid_sets=[dval],
             num_boost_round=n_estimators,
             callbacks=callbacks,
-            verbose_eval=False,
         )
 
         y_pred_proba = gbm.predict(X_val_scaled)

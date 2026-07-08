@@ -29,6 +29,7 @@ CONFIG = {
         "start": "2010-01-01",
         "end": "2025-12-31",
         "models": list(MODEL_REGISTRY.keys()),
+        # "models": ["lgbm"],
         "n_trials": 60,
         "synthetic": False,
         "horizon": 5,
