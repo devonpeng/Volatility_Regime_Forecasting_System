@@ -862,7 +862,11 @@ Feature selection helps:
 - Improve interpretability
 - Lower overfitting risk
 
-![](./example_runs/plots/feature_selection.png)
+| Method |
+|:-:|
+| ![](./example_runs/plots/feature_selection.png)| 
+| ![](./example_runs/plots/feature_correlation.png) |
+
 ---
 
 ## 12. Model Training
