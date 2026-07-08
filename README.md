@@ -184,9 +184,9 @@ Model ranking:
 Run dir     : cache/runs/<run-id>
 Plots dir   : cache/runs/<run-id>/plots
 ```
-|Hyperparamater Trace Log | Evaluation Set ROC Curve |
+|Model Performance Evaluation | Prediction Review |
 |--|--|
-|![](./example_runs/plots/feature_correlation.png)|![](./example_runs/plots/predictions.png) |
+|![](./example_runs/plots/roc_curve.png)|![](./example_runs/plots/predictions.png) |
 |![](./example_runs/plots/model_comparison.png)|![](./example_runs/plots/price_and_rv.png) |
 
 ### Evaluate a Saved Run
@@ -851,8 +851,8 @@ Example CLI usage:
 
 ```bash
 uv run python train.py \
-  --feature-selection tree_topk \
-  --top-k-features 5
+  --feature-selection lasso \
+  --top-k-features 12
 ```
 
 Feature selection helps:
@@ -1153,10 +1153,16 @@ If no LLM API key is available, the system falls back to a rule-based summary.
 This makes the evaluation output more interpretable and suitable for presentation.
 
 ```json
+// LLM SHAP summary
 {
     "status": "approved",
     "final_brief": "`[DR]` In this model, downside_rv has a SHAP value of 0.4004274642420753, vol_of_vol has a value of 0.26804987908225236, and ewma_rv has a value of -0.20919584346879797.`[FI]` These metrics indicate a contracting market regime where downside risk and volatility of volatility are the primary forces driving the consolidation.",
     "issues": [],
+}
+
+// Fallback SHAP Summary
+{
+    "final_brief": "[DR] kalman_price_medium has SHAP contribution 0.9118 for predicted class contracting. [FI] The upward pressure from kalman_price_medium appears to be the dominant driver in the current volatility regime transition."
 }
 ```
 ---
