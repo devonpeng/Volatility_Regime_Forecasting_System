@@ -99,7 +99,7 @@ def build_macro_regime_labels(
         index=oof_valid_df.index,
         name="Regime",
     )
-    return regimes, threshold, indicator_name, indicator_meta
+    return regimes, threshold, indicator_name, indicator_meta, macro_indicator
 
 
 def group_confusion_matrices(

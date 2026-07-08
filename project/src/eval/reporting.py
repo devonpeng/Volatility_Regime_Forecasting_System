@@ -212,9 +212,12 @@ def run_dm_evaluation(
         "dm_log_loss": prior_entry["dm_log_loss"],
         "baselines_compared": baselines_out,
         "baseline_notes": baseline_notes,
+        # ── fields for programmatic access / plotting (not serialised) ──
+        "_y_valid": y_valid.tolist(),
+        "_model_proba": model_proba.tolist(),
     }
 
-    regimes, regime_threshold, regime_indicator_name, regime_indicator_meta = build_macro_regime_labels(
+    regimes, regime_threshold, regime_indicator_name, regime_indicator_meta, macro_indicator_raw = build_macro_regime_labels(
         oof_valid_df,
         pipeline_config,
         ma_window=30,
@@ -233,6 +236,13 @@ def run_dm_evaluation(
             threshold=0.5,
         ),
     }
+    # Store regime vector & raw VIX series for downstream plotting (JSON-serialisable)
+    report["regime_split"]["_Regime"] = regimes.tolist()
+    report["regime_split"].update({k: v for k, v in regime_indicator_meta.items() if isinstance(v, (str, int, float, bool))})
+    report["regime_split"]["raw_" + regime_indicator_name] = macro_indicator_raw.tolist()
+    # Save Date column for downstream plotting
+    if "Date" in oof_valid_df:
+        report["_dates"] = oof_valid_df["Date"].tolist()
     report["llm_briefing"] = build_llm_briefing(run_dir, shap_max_samples=shap_max_samples)
 
     if save_report:

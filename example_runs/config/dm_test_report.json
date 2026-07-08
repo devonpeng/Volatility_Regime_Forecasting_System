@@ -1,0 +1,166 @@
+{
+  "baseline": "prior",
+  "dm_variance_settings": {
+    "variance_estimator": "newey_west",
+    "hac_lag_rule": "horizon_minus_1",
+    "hac_lag_value": 4,
+    "overlap_note": "For horizon=h, adjacent targets overlap by h-1 observations."
+  },
+  "n_oof": 2772,
+  "horizon": 5,
+  "best_model_name": "logistic",
+  "model": {
+    "brier": 0.17368552268427104,
+    "log_loss": 0.5169768393489659
+  },
+  "baseline_metrics": {
+    "brier": 0.2506193487931751,
+    "log_loss": 0.7060342018381902
+  },
+  "dm_brier": {
+    "dm_stat": 11.073631849384187,
+    "p_value_one_sided": 0.0,
+    "p_value_two_sided": 0.0,
+    "mean_loss_diff": 0.07693382610890406,
+    "variance_estimator": "newey_west",
+    "hac_lag": 4
+  },
+  "dm_log_loss": {
+    "dm_stat": 9.366600261978045,
+    "p_value_one_sided": 0.0,
+    "p_value_two_sided": 0.0,
+    "mean_loss_diff": 0.1890573624892243,
+    "variance_estimator": "newey_west",
+    "hac_lag": 4
+  },
+  "baselines_compared": [
+    {
+      "name": "garch",
+      "metrics": {
+        "brier": 0.1981305069013851,
+        "log_loss": 0.5860352614212706
+      },
+      "dm_brier": {
+        "dm_stat": 3.5590176105288154,
+        "p_value_one_sided": 0.00018612228695269462,
+        "p_value_two_sided": 0.00037224457390538923,
+        "mean_loss_diff": 0.024444984217114076,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      },
+      "dm_log_loss": {
+        "dm_stat": 4.120231681602265,
+        "p_value_one_sided": 1.892458068342151e-05,
+        "p_value_two_sided": 3.784916136684302e-05,
+        "mean_loss_diff": 0.06905842207230474,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      }
+    },
+    {
+      "name": "prior",
+      "metrics": {
+        "brier": 0.2506193487931751,
+        "log_loss": 0.7060342018381902
+      },
+      "dm_brier": {
+        "dm_stat": 11.073631849384187,
+        "p_value_one_sided": 0.0,
+        "p_value_two_sided": 0.0,
+        "mean_loss_diff": 0.07693382610890406,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      },
+      "dm_log_loss": {
+        "dm_stat": 9.366600261978045,
+        "p_value_one_sided": 0.0,
+        "p_value_two_sided": 0.0,
+        "mean_loss_diff": 0.1890573624892243,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      }
+    },
+    {
+      "name": "rv_persist",
+      "metrics": {
+        "brier": 0.03472656799612575,
+        "log_loss": 1.1964290575922412
+      },
+      "dm_brier": {
+        "dm_stat": -18.331951150519558,
+        "p_value_one_sided": 1.0,
+        "p_value_two_sided": 0.0,
+        "mean_loss_diff": -0.1389589546881453,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      },
+      "dm_log_loss": {
+        "dm_stat": 4.360214689687329,
+        "p_value_one_sided": 6.496744916262287e-06,
+        "p_value_two_sided": 1.2993489832524574e-05,
+        "mean_loss_diff": 0.6794522182432752,
+        "variance_estimator": "newey_west",
+        "hac_lag": 4
+      }
+    }
+  ],
+  "baseline_notes": [],
+  "regime_split": {
+    "macro_indicator": "vix_ma30_from_yfinance",
+    "macro_indicator_details": {
+      "used_fallback": false,
+      "reason": null,
+      "source_symbol": "^VIX",
+      "construction": "close_rolling_mean",
+      "ma_window": 30
+    },
+    "threshold_rule": "median_of_macro_indicator",
+    "threshold_value": 16.81450001398722,
+    "group_confusion_matrices": {
+      "High_VIX": {
+        "n_samples": 1386,
+        "threshold": 0.5,
+        "confusion_matrix": [
+          [
+            257,
+            166
+          ],
+          [
+            204,
+            759
+          ]
+        ]
+      },
+      "Low_VIX": {
+        "n_samples": 1386,
+        "threshold": 0.5,
+        "confusion_matrix": [
+          [
+            831,
+            99
+          ],
+          [
+            262,
+            194
+          ]
+        ]
+      }
+    }
+  },
+  "llm_briefing": {
+    "generator_output": "_call_google_llm(generator_prompt)",
+    "review_status": "str(review_payload.get(\"status\", \"rejected\")).lower()",
+    "review_raw_output": "_call_google_llm(reviewer_prompt)",
+    "final_brief": "[DR] kalman_price_medium has SHAP contribution 0.9152 for predicted class contracting. [FI] The upward pressure from kalman_price_medium appears to be the dominant driver in the current volatility regime transition.",
+    "source": "mock_fallback",
+    "lean_shap_context": {
+      "predicted_class": "contracting",
+      "top_features": {
+        "kalman_price_medium": 0.9151698610068286,
+        "vix_level": -0.3673170186888004,
+        "vix_term_structure": -0.3060624472421766
+      }
+    },
+    "error": "review rejected Node0 output"
+  }
+}

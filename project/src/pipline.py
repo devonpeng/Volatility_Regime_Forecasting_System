@@ -153,6 +153,11 @@ class RVPipeline:
             self.end_date,
             use_synthetic=self.use_synthetic,
         )
+        if self.raw_df.shape[0] == 0:
+            raise ValueError(f"No data found for {self.symbol} from {self.start_date} to {self.end_date}")
+        width, height = self.raw_df.shape
+        if height < 255:
+            print("GARCH warning: fewer than 255 features may lead to unstable results or throw an error.")
         return self.raw_df
 
     def build_features(self) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:

@@ -41,7 +41,7 @@ CONFIG = {
         "test_size": 252 * 1,
         "gap_size": 10,
         "output_dir": None,
-        "force_rebuild_features": False,
+        "force_rebuild_features": True,
     },
     "eval": {
         "baselines": None,      # None = all available; e.g. ["prior", "rv_persist"]
