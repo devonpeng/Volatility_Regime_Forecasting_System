@@ -15,8 +15,8 @@
   "nested_feature_selection": false,
   "top_k_features": 12,
   "random_state": 42,
-  "force_rebuild_features": true,
+  "force_rebuild_features": false,
   "data_source": "unknown",
   "best_model_name": "logistic",
-  "best_auc": 0.7989989847193425
+  "best_auc": 0.7989083885372175
 }
