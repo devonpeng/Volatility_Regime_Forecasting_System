@@ -8,7 +8,7 @@ import pandas as pd
 
 from project.src.data.load_data import get_data_with_fallback
 from project.src.data.spliter import TimeSeriesSplitWithPurge
-from project.src.features.core import build_dataset
+from project.src.features.core import build_dataset, get_feature_steps
 from project.src.features.selection import (
     FeatureSelectionResult,
     SELECTOR_REGISTRY,
@@ -18,7 +18,13 @@ from project.src.models import ModelResult, compute_oof_metrics, evaluate_oof, t
 from project.src.metrics.baseline import prior_probability_baseline
 from project.src.models.registry import MODEL_REGISTRY
 from project.src.utils.artifacts import save_run_artifacts
-from project.src.utils.cache import RunCache, get_runs_dir
+from project.src.utils.cache import (
+    RunCache,
+    dataset_cache_key,
+    get_runs_dir,
+    load_cached_dataset,
+    save_cached_dataset,
+)
 
 
 @dataclass
@@ -60,6 +66,7 @@ class RVPipeline:
         gap_size: int = 5,
         output_dir: str | None = None,
         random_state: int = 42,
+        force_rebuild_features: bool = False,
     ):
         self.symbol = symbol
         self.start_date = start_date
@@ -78,6 +85,7 @@ class RVPipeline:
         self.gap_size = gap_size
         self.runs_parent = Path(output_dir) if output_dir else None
         self.random_state = random_state
+        self.force_rebuild_features = force_rebuild_features
 
         self.run_cache: RunCache | None = None
         self.output_dir: Path | None = None
@@ -96,6 +104,8 @@ class RVPipeline:
         self.oof_metrics: dict[str, float] = {}
         self.feature_selection_result: FeatureSelectionResult | None = None
         self.selected_features: list[str] = []
+        self._dataset_cache_key: str | None = None
+        self._loaded_from_dataset_cache: bool = False
 
     def _pipeline_config(self) -> dict:
         return {
@@ -111,7 +121,22 @@ class RVPipeline:
             "nested_feature_selection": self.nested_feature_selection,
             "top_k_features": self.top_k_features,
             "random_state": self.random_state,
+            "force_rebuild_features": self.force_rebuild_features,
         }
+
+    def _feature_step_names(self) -> list[str]:
+        return [step.name for step in get_feature_steps()]
+
+    def _compute_dataset_cache_key(self) -> str:
+        return dataset_cache_key(
+            symbol=self.symbol,
+            start_date=self.start_date,
+            end_date=self.end_date,
+            horizon=self.horizon,
+            label_method=self.label_method,
+            use_synthetic=self.use_synthetic,
+            feature_names=self._feature_step_names(),
+        )
 
     def _cv_config(self) -> dict:
         return {
@@ -131,6 +156,17 @@ class RVPipeline:
         return self.raw_df
 
     def build_features(self) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+        cache_key = self._compute_dataset_cache_key()
+        self._dataset_cache_key = cache_key
+
+        if not self.force_rebuild_features:
+            cached = load_cached_dataset(cache_key)
+            if cached is not None:
+                self.raw_df, self.X, self.y, self.meta_df = cached
+                self._loaded_from_dataset_cache = True
+                print(f"Dataset cache hit: {cache_key[:12]}... (skipping load_data/build_features)")
+                return self.X, self.y, self.meta_df
+
         if self.raw_df is None:
             self.load_data()
         assert self.raw_df is not None
@@ -139,10 +175,31 @@ class RVPipeline:
             horizon=self.horizon,
             label_method=self.label_method,
         )
+        self._loaded_from_dataset_cache = False
+
+        feature_names = list(self.X.columns)
+        save_cached_dataset(
+            cache_key,
+            symbol=self.symbol,
+            start_date=self.start_date,
+            end_date=self.end_date,
+            horizon=self.horizon,
+            label_method=self.label_method,
+            use_synthetic=self.use_synthetic,
+            feature_names=feature_names,
+            raw_df=self.raw_df,
+            X=self.X,
+            y=self.y,
+            meta_df=self.meta_df,
+        )
+        action = "rebuilt" if self.force_rebuild_features else "miss"
+        print(f"Dataset cache {action}: saved datasets/{cache_key[:12]}...")
         return self.X, self.y, self.meta_df
 
     def run_feature_selection(self) -> FeatureSelectionResult | None:
         """Select features using tree top-k, lasso, or t-test."""
+        # Store full X before feature selection
+        self._X_unselected = self.X.copy()
         if self.feature_selection is None:
             return None
         if self.nested_feature_selection:
@@ -171,6 +228,11 @@ class RVPipeline:
         )
         self.feature_selection_result = result
         self.selected_features = result.selected_features
+        # Keep full X (pre-selection) for baselines that need it
+        if hasattr(self, '_X_pre_selection') and self._X_pre_selection is not None:
+            pass  # already stored
+        else:
+            self._X_pre_selection = self._X_unselected.copy() if hasattr(self, '_X_unselected') and self._X_unselected is not None else None
         self.X = result.X_selected
         print(
             f"Feature selection ({self.feature_selection}): "
@@ -292,6 +354,13 @@ class RVPipeline:
             plot_module.plot_optuna_history(
                 best_result.study,
                 output_path=self.output_dir / "optuna_history.png",
+                model_name=best_result.name,
+            )
+        for model_result in self.model_results:
+            plot_module.plot_optuna_history(
+                model_result.study,
+                output_path=self.output_dir / f"optuna_history_{model_result.name}.png",
+                model_name=model_result.name,
             )
 
         if self.oof_proba_full is not None and self.oof_true is not None and self.oof_proba is not None:
@@ -331,6 +400,7 @@ class RVPipeline:
             data_source=self.raw_df.attrs.get("source", "unknown"),
             raw_df=self.raw_df,
             X=self.X,
+            X_all=getattr(self, '_X_unselected', None),
             y=self.y,
             meta_df=self.meta_df,
             model_results=self.model_results,
@@ -345,10 +415,27 @@ class RVPipeline:
         )
 
     def run(self) -> PipelineResult:
-        self.load_data()
+        print(f"Running pipeline for {self.symbol} from {self.start_date} to {self.end_date} with horizon {self.horizon}")
+        print(f"Using models: {self.models}")
+        print(f"Using feature selection: {self.feature_selection}")
+        print(f"Using nested feature selection: {self.nested_feature_selection}")
+        print(f"Using top k features: {self.top_k_features}")
+        print(f"Using n splits: {self.n_splits}")
+        print(f"Using train window size: {self.train_window_size}")
+        print(f"Using test size: {self.test_size}")
+        print(f"########################################################")
+        print("Building features (with shared dataset cache)...\n")
         self.build_features()
+        if self._loaded_from_dataset_cache:
+            print("Features loaded from dataset cache")
+        else:
+            print("Features built successfully")
+        print("Running feature selection...\n")
         self.run_feature_selection()
+        print(f"Feature selection completed successfully")
+        print("Creating cv...\n")
         self.create_cv()
+        print("Tuning models...")
 
         assert self.raw_df is not None and self.X is not None and self.y is not None
         data_source = self.raw_df.attrs.get("source", "unknown")

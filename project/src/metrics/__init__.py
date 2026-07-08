@@ -1,4 +1,5 @@
 from project.src.metrics.baseline import (
+    garch_calibrated_baseline_oof,
     prior_probability_baseline,
     rv_hist_persistence_baseline,
 )
@@ -17,5 +18,6 @@ __all__ = [
     "per_observation_log_loss",
     "prior_probability_baseline",
     "rv_hist_persistence_baseline",
+    "garch_calibrated_baseline_oof",
     "diebold_mariano_test",
 ]

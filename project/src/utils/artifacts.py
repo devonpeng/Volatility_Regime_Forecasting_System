@@ -20,6 +20,7 @@ def save_run_artifacts(
     data_source: str,
     raw_df: pd.DataFrame,
     X: pd.DataFrame,
+    X_all: pd.DataFrame | None,
     y: pd.Series,
     meta_df: pd.DataFrame,
     model_results: list[ModelResult],
@@ -76,6 +77,9 @@ def save_run_artifacts(
 
     run_cache.save_csv("raw.csv", raw_df)
     run_cache.save_csv("X.csv", X.reset_index(drop=True))
+    # Also save full X before feature selection (for garch baseline etc.)
+    if X_all is not None and isinstance(X_all, pd.DataFrame) and not list(X.columns) == list(X_all.columns):
+        run_cache.save_csv("X_all.csv", X_all.reset_index(drop=True))
     run_cache.save_csv("y.csv", pd.DataFrame({"y": y.reset_index(drop=True)}))
     run_cache.save_csv("meta.csv", meta_df.reset_index(drop=True))
 

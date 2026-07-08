@@ -98,6 +98,7 @@ def get_data(
     return _get_YFin_data_online(symbol, start_date, end_date)
 
 
+@functools.lru_cache(maxsize=128)
 def _download_close_series(
     ticker: str,
     alias: str,
@@ -145,7 +146,8 @@ def attach_market_context(
                 if series is None:
                     print(f"[warn] {ticker} data empty, skipping {alias}")
                     continue
-                out = out.merge(series, on="Date", how="left")
+                # Copy so callers cannot mutate the cached frame.
+                out = out.merge(series.copy(), on="Date", how="left")
                 attached_cols.append(alias)
             except Exception as sub_exc:
                 print(f"[warn] Failed to fetch {ticker} ({sub_exc}), skipping {alias}")

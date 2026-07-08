@@ -118,12 +118,32 @@ uv run python train.py \
 | 参数 | 类型 | 默认值 | 用途 |
 |---|---|---|---|
 | `--run-dir` | `str` | 无（必填） | 指向单次训练产物目录（通常位于 `cache/runs/<run-id>`），用于 DM 评估与 LLM briefing |
+| `--baselines` | `str` | 空（全部运行） | 逗号或空格分隔，如 `prior,rv_persist,garch`。合法值：`prior`, `rv_persist`, `garch` |
+| `--shap-max-samples` | `int` | `100` | LinearExplainer 背景样本上限；传 `<=0` 表示用全量样本（消除 SHAP 警告） |
 
 ### `main.py`
 
-`main.py` 当前没有 CLI 参数，仅打印一行示例文本。
+默认无 CLI 参数（训练配置通过顶部 `CONFIG` dict 调整）。也支持传入 `--baselines` 和 `--shap-max-samples` 覆盖评估行为：
 
----
+```bash
+uv run python main.py
+```
+
+会先跑完整训练并打印训练摘要，再用产出的 `run_dir` 自动串联 DM 评估并打印评估报告。
+
+#### `main.py` 可选 CLI 参数
+
+| 参数 | 类型 | 默认值 | 用途 |
+|---|---|---|---|
+| `--baselines` | `str` | 空（全部运行） | 逗号或空格分隔，如 `prior,rv_persist,garch`。直接覆盖 CONFIG 中的 `_eval_baselines` |
+| `--shap-max-samples` | `int` | CONFIG 中指定（通常 100） | LinearExplainer 背景样本上限；`<=0` 表示用全量 |
+
+示例：
+
+```bash
+uv run python main.py --baselines prior,garch
+uv run python main.py --shap-max-samples 200 --baselines "prior rv_persist"
+```
 
 ## 3) 如何通过代码调用并训练（Python API）
 
@@ -216,56 +236,84 @@ print_report(report)
 
 ### 当前默认 Feature 列表（已与代码同步）
 
-`features/core.py` 的 `DEFAULT_FEATURE_STEPS` 当前默认包含以下 36 个特征（按执行顺序）：
+`features/core.py` 的 `DEFAULT_FEATURE_STEPS` 当前默认包含以下 49 个特征（按执行顺序）：
 
-`ret_1d`, `hl_range`, `rv_hist_5d`, `rv_hist_20d`, `gk_rv`, `rs_rv`, `yz_rv`, `volume_zscore`, `parkinson_rv`, `ewma_rv`, `downside_rv`, `vol_of_vol`, `rv_accel`, `ret_skew_20d`, `ret_kurt_20d`, `max_drawdown_20d`, `ret_autocorr_1_20d`, `abs_ret_lag1`, `rv_ratio_5_20`, `vix_level`, `vix_change_1d`, `vix_term_structure`, `vix_rv_spread`, `vvix_level`, `skew_index_level`, `yield_change_1d`, `dxy_change_1d`, `gold_ret_1d`, `day_of_week`, `is_month_end`, `is_quarter_end`, `dist_from_ma50`, `bb_width`, `overnight_ret`, `intraday_ret`, `overnight_vol_5d`
+`ret_1d`, `hl_range`, `rv_hist_5d`, `rv_hist_20d`, `gk_rv`, `rs_rv`, `yz_rv`, `volume_zscore`, `parkinson_rv`, `ewma_rv`, `downside_rv`, `vol_of_vol`, `rv_accel`, `ret_skew_20d`, `ret_kurt_20d`, `max_drawdown_20d`, `ret_autocorr_1_20d`, `abs_ret_lag1`, `rv_ratio_5_20`, `vix_level`, `vix_change_1d`, `vix_term_structure`, `vix_rv_spread`, `vvix_level`, `skew_index_level`, `yield_change_1d`, `dxy_change_1d`, `gold_ret_1d`, `day_of_week`, `is_month_end`, `is_quarter_end`, `dist_from_ma50`, `bb_width`, `overnight_ret`, `intraday_ret`, `overnight_vol_5d`, `garch_vol_1d`, `gjr_garch_vol_1d`, `egarch_vol_1d`, `garch_vol_ratio_5_20`, `garch_rv_spread`, `har_rv_forecast_1d`, `kalman_price_medium`, `kalman_ret_1d_medium`, `kalman_trend_medium`, `kalman_resid_medium`, `kalman_resid_zscore_medium`, `kalman_state_var_medium`, `close_to_kalman_medium`
 
 其中：
 
-- 仅依赖标的自身 OHLCV 的特征可直接从主行情构建（如 `gk_rv` / `yz_rv` / `downside_rv`）。
+- 仅依赖标的自身 OHLCV 的特征可直接从主行情构建（如 `gk_rv` / `yz_rv` / `downside_rv` / GARCH / HAR-RV / Kalman）。
 - 宏观/跨资产特征依赖 `load_data.py` 自动附加的市场上下文列：`vix`, `vix3m`, `vvix`, `skew`, `tnx`, `dxy`, `gold`。
 - 数据层会尝试拉取 `^VIX`, `^VIX3M`, `^VVIX`, `^SKEW`, `^TNX`, `DX-Y.NYB`, `GC=F`；若某个 ticker 缺失，会自动跳过，不阻塞训练流程。
+- GARCH / HAR-RV / Kalman 特征依赖 `arch` / `scikit-learn` / `pykalman`；并统一 `shift(1)`，按开盘前可用信息对齐（不使用当日收盘价）。
+- Kalman 在 `log(Close)` 上做 local-linear-trend filtering（`process_var=1e-5`, `obs_var=1e-3`），再按特征需要回映到价格语义；非正价按缺失处理。
+- HAR-RV 用单日 Garman-Klass 年化波动构造 \(RV^{(d/w/m)}\)（1/5/22），滚动窗内 `StandardScaler` + Ridge（`alpha=1.0`, `fit_window=750`, `min_obs=252`）做一步预测，负值 `clip` 到 0 后 `shift(1)`。
+- DM 评估除 prior / RV persistence baseline 外，还会比较 `garch_vol_1d` 的 Logistic 校准 baseline（`garch_vol_1d_logistic_calibration`）。
+
+**尺度/变换标注**（只标该 step 自身对输入做的变换；下游派生不重复继承）：
+
+| 标注 | 含义 | 特征 |
+|---|---|---|
+| **log** | 对价格/收益显式取 `log`，或在 log 空间建模/输出残差·状态 | `garch_vol_1d`, `gjr_garch_vol_1d`, `egarch_vol_1d`, `kalman_price_medium`, `kalman_trend_medium`, `kalman_resid_medium`, `kalman_resid_zscore_medium`, `kalman_state_var_medium` |
+| **比值** | `P₁/P₂`、`pct_change`、`(P-A)/A` 一类相对价格/水平比（非 log） | `ret_1d`, `hl_range`, `max_drawdown_20d`, `dxy_change_1d`, `gold_ret_1d`, `dist_from_ma50`, `bb_width`, `kalman_ret_1d_medium`, `close_to_kalman_medium` |
+| **log+比值** | 典型 `log(P₁/P₂)`：比值后再取对数（或等价的对数收益） | `parkinson_rv`, `gk_rv`, `rs_rv`, `yz_rv`, `overnight_ret`, `intraday_ret`, `overnight_vol_5d`, `har_rv_forecast_1d` |
+| **波动比值** | 波动特征之间相除（不是价格比） | `rv_ratio_5_20`, `garch_vol_ratio_5_20` |
+
+其余未列出的默认特征为水平值、差分、滚动统计或 z-score 等，**不做**价格 log / `P₁/P₂` 比值变换。
 
 ### Feature 含义速查表
 
-| Feature | 主要作用（干什么） | 计算来源（怎么来的） |
-|---|---|---|
-| `ret_1d` | 日收益率，最基础价格变化信号 | `Close.pct_change()` |
-| `hl_range` | 日内振幅，衡量当天价格波动区间 | `(High - Low) / Close` |
-| `rv_hist_5d` | 5 日历史已实现波动率（短期） | `ret_1d` 的 5 日滚动标准差年化 |
-| `rv_hist_20d` | 20 日历史已实现波动率（中期） | `ret_1d` 的 20 日滚动标准差年化 |
-| `gk_rv` | Garman-Klass 波动率，利用 OHLC 降噪 | `High/Low/Open/Close` 对数项组合后滚动均值年化 |
-| `rs_rv` | Rogers-Satchell 波动率，对趋势更稳健 | `log(H/O), log(L/O), log(C/O)` 组合后滚动均值年化 |
-| `yz_rv` | Yang-Zhang 波动率，考虑隔夜跳空 | 隔夜方差 + 开收方差 + RS 分量组合后年化 |
-| `volume_zscore` | 成交量异常程度（放量/缩量） | `Volume` 相对 20 日均值和标准差的 z-score |
-| `parkinson_rv` | Parkinson 波动率，高低价区间估计波动 | `log(High/Low)` 的滚动二阶矩年化 |
-| `ewma_rv` | 更重视近期冲击的波动率估计 | `ret_1d^2` 做 EWMA 后开方年化 |
-| `downside_rv` | 下行半方差，强调负收益风险 | 仅对负 `ret_1d` 平方做滚动均值后开方年化 |
-| `vol_of_vol` | 波动率的波动，识别状态稳定性 | `rv_hist_5d` 的 20 日滚动标准差 |
-| `rv_accel` | 波动率加速度，识别波动状态切换 | `rv_hist_5d - rv_hist_5d.shift(5)` |
-| `ret_skew_20d` | 收益偏度，识别左尾风险倾向 | `ret_1d` 的 20 日滚动偏度 |
-| `ret_kurt_20d` | 收益峰度，识别厚尾/极端波动风险 | `ret_1d` 的 20 日滚动峰度 |
-| `max_drawdown_20d` | 近期最深回撤，衡量尾部压力 | 20 日滚动最高价回撤，再取滚动最小值 |
-| `ret_autocorr_1_20d` | 收益一阶自相关，反映趋势/均值回复状态 | `ret_1d` 在 20 日窗口内计算 lag=1 自相关 |
-| `abs_ret_lag1` | 昨日绝对收益，短期冲击记忆 | `abs(ret_1d).shift(1)` |
-| `rv_ratio_5_20` | 短中期波动率相对强弱 | `rv_hist_5d / rv_hist_20d` |
-| `vix_level` | 隐含波动率水平 | `^VIX` 收盘值 |
-| `vix_change_1d` | 隐含波动率日变动 | `vix.diff().shift(1)` |
-| `vix_term_structure` | VIX 期限结构，识别恐慌/backwardation | `vix3m - vix` |
-| `vix_rv_spread` | 隐含-已实现波动率价差，均值回复信号 | `vix / 100 - rv_hist_20d` |
-| `vvix_level` | “波动率的波动率”水平 | `^VVIX` 收盘值 |
-| `skew_index_level` | 尾部风险溢价强弱 | `^SKEW` 收盘值 |
-| `yield_change_1d` | 利率冲击代理 | `tnx.diff().shift(1)` |
-| `dxy_change_1d` | 美元风险偏好代理 | `dxy.pct_change().shift(1)` |
-| `gold_ret_1d` | 避险资产变动代理 | `gold.pct_change().shift(1)` |
-| `day_of_week` | 周内日历效应 | 交易日 `dayofweek` |
-| `is_month_end` | 月末效应标记 | 日期是否月末（0/1） |
-| `is_quarter_end` | 季末效应标记 | 日期是否季末（0/1） |
-| `dist_from_ma50` | 趋势偏离程度 | `(Close - MA50) / MA50` |
-| `bb_width` | 布林带宽度，波动状态非线性表达 | `4 * rolling_std(Close,20) / rolling_mean(Close,20)` |
-| `overnight_ret` | 隔夜收益，捕捉跳空信息 | `log(Open / Close.shift(1))` |
-| `intraday_ret` | 日内收益，分离日内波动驱动 | `log(Close / Open)` |
-| `overnight_vol_5d` | 隔夜波动率（短期） | `overnight_ret` 的 5 日滚动标准差年化 |
+| Feature | 主要作用（干什么） | 变换 | 计算来源（怎么来的） |
+|---|---|---|---|
+| `ret_1d` | 日收益率，最基础价格变化信号 | 比值 | `Close.pct_change()` |
+| `hl_range` | 日内振幅，衡量当天价格波动区间 | 比值 | `(High - Low) / Close` |
+| `rv_hist_5d` | 5 日历史已实现波动率（短期） | — | `ret_1d` 的 5 日滚动标准差年化 |
+| `rv_hist_20d` | 20 日历史已实现波动率（中期） | — | `ret_1d` 的 20 日滚动标准差年化 |
+| `gk_rv` | Garman-Klass 波动率，利用 OHLC 降噪 | log+比值 | `log(H/L)`, `log(C/O)` 组合后滚动均值年化 |
+| `rs_rv` | Rogers-Satchell 波动率，对趋势更稳健 | log+比值 | `log(H/O), log(L/O), log(C/O)` 组合后滚动均值年化 |
+| `yz_rv` | Yang-Zhang 波动率，考虑隔夜跳空 | log+比值 | 隔夜/开收/RS 的对数收益分量组合后年化 |
+| `volume_zscore` | 成交量异常程度（放量/缩量） | — | `Volume` 相对 20 日均值和标准差的 z-score |
+| `parkinson_rv` | Parkinson 波动率，高低价区间估计波动 | log+比值 | `log(High/Low)` 的滚动二阶矩年化 |
+| `ewma_rv` | 更重视近期冲击的波动率估计 | — | `ret_1d^2` 做 EWMA 后开方年化 |
+| `downside_rv` | 下行半方差，强调负收益风险 | — | 仅对负 `ret_1d` 平方做滚动均值后开方年化 |
+| `vol_of_vol` | 波动率的波动，识别状态稳定性 | — | `rv_hist_5d` 的 20 日滚动标准差 |
+| `rv_accel` | 波动率加速度，识别波动状态切换 | — | `rv_hist_5d - rv_hist_5d.shift(5)` |
+| `ret_skew_20d` | 收益偏度，识别左尾风险倾向 | — | `ret_1d` 的 20 日滚动偏度 |
+| `ret_kurt_20d` | 收益峰度，识别厚尾/极端波动风险 | — | `ret_1d` 的 20 日滚动峰度 |
+| `max_drawdown_20d` | 近期最深回撤，衡量尾部压力 | 比值 | `Close / rolling_max - 1`，再取滚动最小值 |
+| `ret_autocorr_1_20d` | 收益一阶自相关，反映趋势/均值回复状态 | — | `ret_1d` 在 20 日窗口内计算 lag=1 自相关 |
+| `abs_ret_lag1` | 昨日绝对收益，短期冲击记忆 | — | `abs(ret_1d).shift(1)` |
+| `rv_ratio_5_20` | 短中期波动率相对强弱 | 波动比值 | `rv_hist_5d / rv_hist_20d` |
+| `vix_level` | 隐含波动率水平 | — | `^VIX` 收盘值 |
+| `vix_change_1d` | 隐含波动率日变动 | — | `vix.diff().shift(1)` |
+| `vix_term_structure` | VIX 期限结构，识别恐慌/backwardation | — | `vix3m - vix` |
+| `vix_rv_spread` | 隐含-已实现波动率价差，均值回复信号 | — | `vix / 100 - rv_hist_20d` |
+| `vvix_level` | “波动率的波动率”水平 | — | `^VVIX` 收盘值 |
+| `skew_index_level` | 尾部风险溢价强弱 | — | `^SKEW` 收盘值 |
+| `yield_change_1d` | 利率冲击代理 | — | `tnx.diff().shift(1)` |
+| `dxy_change_1d` | 美元风险偏好代理 | 比值 | `dxy.pct_change().shift(1)` |
+| `gold_ret_1d` | 避险资产变动代理 | 比值 | `gold.pct_change().shift(1)` |
+| `day_of_week` | 周内日历效应 | — | 交易日 `dayofweek` |
+| `is_month_end` | 月末效应标记 | — | 日期是否月末（0/1） |
+| `is_quarter_end` | 季末效应标记 | — | 日期是否季末（0/1） |
+| `dist_from_ma50` | 趋势偏离程度 | 比值 | `(Close - MA50) / MA50` |
+| `bb_width` | 布林带宽度，波动状态非线性表达 | 比值 | `4 * rolling_std(Close,20) / rolling_mean(Close,20)` |
+| `overnight_ret` | 隔夜收益，捕捉跳空信息 | log+比值 | `log(Open / Close.shift(1))` |
+| `intraday_ret` | 日内收益，分离日内波动驱动 | log+比值 | `log(Close / Open)` |
+| `overnight_vol_5d` | 隔夜波动率（短期） | log+比值 | `overnight_ret` 的 5 日滚动标准差年化 |
+| `garch_vol_1d` | GARCH(1,1)-t 一步波动预测 | log | 对 `log(Close).diff()` 滚动拟合后年化，再 `shift(1)` |
+| `gjr_garch_vol_1d` | GJR-GARCH 一步波动，捕捉杠杆效应 | log | 同上，GARCH + `o=1`，年化后 `shift(1)` |
+| `egarch_vol_1d` | EGARCH 一步波动，非对称波动 | log | 同上，EGARCH(1,1)-t，年化后 `shift(1)` |
+| `garch_vol_ratio_5_20` | GARCH 预测相对历史 RV 强弱 | 波动比值 | `garch_vol_1d / rv_hist_20d` |
+| `garch_rv_spread` | GARCH 预测与历史实现波动价差 | — | `garch_vol_1d - rv_hist_20d` |
+| `har_rv_forecast_1d` | HAR-RV 一步波动预测 | log+比值 | 日度 GK（`log(H/L)`, `log(C/O)`）的 d/w/m，Scaled-Ridge 后 `clip≥0` 再 `shift(1)` |
+| `kalman_price_medium` | Kalman 去噪价格水平（medium） | log | 对 `log(Close)` 做 filtering，再 `exp` 回映，`shift(1)` |
+| `kalman_ret_1d_medium` | 去噪价格日收益 | 比值 | 回映价格的 `pct_change().shift(1)` |
+| `kalman_trend_medium` | 去噪状态趋势分量（log 漂移） | log | log 空间速度项，`shift(1)` |
+| `kalman_resid_medium` | 对数价格相对去噪 log 水平的残差 | log | `(log(Close) - filtered_log).shift(1)` |
+| `kalman_resid_zscore_medium` | 对数残差标准化 | log | log 残差 20 日 z-score 后 `shift(1)` |
+| `kalman_state_var_medium` | 状态不确定性（log 水平） | log | Kalman log 水平状态方差，`shift(1)` |
+| `close_to_kalman_medium` | 现价相对去噪价偏离率 | 比值 | `((Close - kalman_price) / kalman_price).shift(1)` |
 
 ### 方式 A：新增一个 feature step（推荐）
 
@@ -487,7 +535,7 @@ LLM_MODEL=gemini-3.5-flash
 
 1. Enter a ticker symbol (e.g. `SPY`), date range, or toggle synthetic data
 2. Click **Load Data** — head/tail preview appears
-3. Select which features to compute from the 36 available
+3. Select which features to compute from the 48 available
 4. Click **Build Features** to generate the enriched DataFrame
 5. Optionally describe a new feature in natural language and click **Generate Feature with Gemini**
 6. Configure the label horizon (1–20 days) and method, then click **Build Dataset (X, y)**
@@ -529,7 +577,7 @@ project/
 │   │       ├── model_train.py      # Page 3
 │   │       └── evaluation.py       # Page 4
 │   ├── data/                       # Data loading (yfinance, synthetic)
-│   ├── features/                   # Feature engineering (36 steps)
+│   ├── features/                   # Feature engineering (48 steps)
 │   ├── models/                     # Model registry, Optuna tuner, evaluator
 │   ├── eval/                       # LLM briefing, regime analysis
 │   ├── metrics/                    # Brier, log-loss, Diebold-Mariano

@@ -310,3 +310,361 @@ def add_overnight_vol_5d(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
         overnight_ret.rolling(window, min_periods=window).std() * ANNUALIZATION
     )
     return out
+
+
+def _rolling_garch_vol_forecast(
+    close: pd.Series,
+    *,
+    window: int = 750,
+    min_obs: int = 252,
+    p: int = 1,
+    o: int = 0,
+    q: int = 1,
+    vol: str = "GARCH",
+    dist: str = "t",
+) -> pd.Series:
+    """Rolling one-step-ahead annualized volatility; uses history through t-1 only."""
+    from arch import arch_model
+
+    log_close = np.log(pd.to_numeric(close, errors="coerce"))
+    ret = log_close.diff() * 100.0
+    garch_vol = pd.Series(np.nan, index=close.index, dtype=float)
+
+    for i in range(min_obs, len(close)):
+        start = max(0, i - window)
+        train_ret = ret.iloc[start:i].dropna()
+        if len(train_ret) < min_obs:
+            continue
+        try:
+            model = arch_model(
+                train_ret,
+                mean="Zero",
+                vol=vol,
+                p=p,
+                o=o,
+                q=q,
+                dist=dist,
+                rescale=False,
+            )
+            res = model.fit(disp="off", show_warning=False)
+            forecast = res.forecast(horizon=1, reindex=False)
+            var_1d = float(forecast.variance.iloc[-1, 0])
+            garch_vol.iloc[i] = np.sqrt(max(var_1d, 0.0)) / 100.0 * ANNUALIZATION
+        except Exception:
+            garch_vol.iloc[i] = np.nan
+
+    return garch_vol
+
+
+def add_garch_vol_1d(
+    df: pd.DataFrame,
+    window: int = 750,
+    min_obs: int = 252,
+) -> pd.DataFrame:
+    """GARCH(1,1)-t one-step vol forecast, shifted for pre-open availability."""
+    out = df.copy()
+    vol = _rolling_garch_vol_forecast(
+        out["Close"],
+        window=window,
+        min_obs=min_obs,
+        p=1,
+        o=0,
+        q=1,
+        vol="GARCH",
+        dist="t",
+    )
+    out["garch_vol_1d"] = vol.shift(1)
+    return out
+
+
+def add_gjr_garch_vol_1d(
+    df: pd.DataFrame,
+    window: int = 750,
+    min_obs: int = 252,
+) -> pd.DataFrame:
+    """GJR-GARCH(1,1)-t one-step vol forecast, shifted for pre-open availability."""
+    out = df.copy()
+    vol = _rolling_garch_vol_forecast(
+        out["Close"],
+        window=window,
+        min_obs=min_obs,
+        p=1,
+        o=1,
+        q=1,
+        vol="GARCH",
+        dist="t",
+    )
+    out["gjr_garch_vol_1d"] = vol.shift(1)
+    return out
+
+
+def add_egarch_vol_1d(
+    df: pd.DataFrame,
+    window: int = 750,
+    min_obs: int = 252,
+) -> pd.DataFrame:
+    """EGARCH(1,1)-t one-step vol forecast, shifted for pre-open availability."""
+    out = df.copy()
+    vol = _rolling_garch_vol_forecast(
+        out["Close"],
+        window=window,
+        min_obs=min_obs,
+        p=1,
+        o=1,
+        q=1,
+        vol="EGARCH",
+        dist="t",
+    )
+    out["egarch_vol_1d"] = vol.shift(1)
+    return out
+
+
+def add_garch_vol_ratio_5_20(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    garch = _series_or_default(out, "garch_vol_1d")
+    rv20 = _series_or_default(out, "rv_hist_20d")
+    out["garch_vol_ratio_5_20"] = garch / rv20.replace(0, np.nan)
+    return out
+
+
+def add_garch_rv_spread(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    garch = _series_or_default(out, "garch_vol_1d")
+    rv20 = _series_or_default(out, "rv_hist_20d")
+    out["garch_rv_spread"] = garch - rv20
+    return out
+
+
+def _daily_garman_klass_vol(df: pd.DataFrame) -> pd.Series:
+    """Single-day Garman-Klass annualized volatility (no rolling average)."""
+    high = pd.to_numeric(df["High"], errors="coerce")
+    low = pd.to_numeric(df["Low"], errors="coerce")
+    open_ = pd.to_numeric(df["Open"], errors="coerce")
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    valid = (
+        np.isfinite(high)
+        & np.isfinite(low)
+        & np.isfinite(open_)
+        & np.isfinite(close)
+        & (high > 0)
+        & (low > 0)
+        & (open_ > 0)
+        & (close > 0)
+    )
+    log_hl_sq = np.log(high / low).pow(2)
+    log_co_sq = np.log(close / open_).pow(2)
+    gk_var = 0.5 * log_hl_sq - (2.0 * np.log(2.0) - 1.0) * log_co_sq
+    daily = np.sqrt(gk_var.clip(lower=0.0)) * ANNUALIZATION
+    return daily.where(valid)
+
+
+def _rolling_har_rv_forecast(
+    daily_rv: pd.Series,
+    *,
+    week_window: int = 5,
+    month_window: int = 22,
+    fit_window: int = 750,
+    min_obs: int = 252,
+    alpha: float = 1.0,
+) -> pd.Series:
+    """Rolling one-step HAR-RV forecast on annualized daily RV (uses info through t)."""
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    rv_d = daily_rv.astype(float)
+    rv_w = rv_d.rolling(week_window, min_periods=week_window).mean()
+    rv_m = rv_d.rolling(month_window, min_periods=month_window).mean()
+
+    x_all = pd.DataFrame({"d": rv_d, "w": rv_w, "m": rv_m})
+    y_all = rv_d.shift(-1)
+    forecast = pd.Series(np.nan, index=daily_rv.index, dtype=float)
+
+    for i in range(len(daily_rv)):
+        start = max(0, i - fit_window)
+        # Train on pairs available through t=i: features at s, target RV_d[s+1] with s+1 <= i.
+        train = pd.concat(
+            [x_all.iloc[start:i], y_all.iloc[start:i].rename("y")],
+            axis=1,
+        ).dropna()
+        if len(train) < min_obs:
+            continue
+        x_now = x_all.iloc[i]
+        if x_now.isna().any():
+            continue
+        try:
+            model = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("ridge", Ridge(alpha=alpha, fit_intercept=True)),
+                ]
+            )
+            model.fit(train[["d", "w", "m"]].to_numpy(dtype=float), train["y"].to_numpy(dtype=float))
+            pred = float(model.predict(x_now.to_numpy(dtype=float).reshape(1, -1))[0])
+            forecast.iloc[i] = max(pred, 0.0)
+        except Exception:
+            forecast.iloc[i] = np.nan
+
+    return forecast
+
+
+def add_har_rv_forecast_1d(
+    df: pd.DataFrame,
+    week_window: int = 5,
+    month_window: int = 22,
+    fit_window: int = 750,
+    min_obs: int = 252,
+    alpha: float = 1.0,
+) -> pd.DataFrame:
+    """HAR-RV one-step forecast from daily Garman-Klass vol; shifted for pre-open use."""
+    out = df.copy()
+    daily_rv = _daily_garman_klass_vol(out)
+    forecast = _rolling_har_rv_forecast(
+        daily_rv,
+        week_window=week_window,
+        month_window=month_window,
+        fit_window=fit_window,
+        min_obs=min_obs,
+        alpha=alpha,
+    )
+    out["har_rv_forecast_1d"] = forecast.shift(1)
+    return out
+
+
+def _kalman_medium_filter(
+    close: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Local-linear-trend Kalman filter on log price (filtering only, no smoothing).
+
+    Filters ``log(Close)`` so Q/R stay scale-invariant across assets. Returns
+    (price, log_level, trend, state_var) where ``price = exp(log_level)``,
+    ``trend`` is the log-space velocity, and ``state_var`` is the log-level
+    state variance. Non-positive / non-finite closes are treated as missing.
+    """
+    from pykalman import KalmanFilter
+
+    close_num = pd.to_numeric(close, errors="coerce").astype(float)
+    values = close_num.to_numpy(dtype=float)
+    price = pd.Series(np.nan, index=close.index, dtype=float)
+    log_level = pd.Series(np.nan, index=close.index, dtype=float)
+    trend = pd.Series(np.nan, index=close.index, dtype=float)
+    state_var = pd.Series(np.nan, index=close.index, dtype=float)
+
+    valid_mask = np.isfinite(values) & (values > 0)
+    if int(valid_mask.sum()) < 2:
+        return price, log_level, trend, state_var
+
+    log_obs = np.full(len(values), np.nan, dtype=float)
+    log_obs[valid_mask] = np.log(values[valid_mask])
+
+    first_valid = int(np.flatnonzero(valid_mask)[0])
+    obs = log_obs.copy()
+    # Forward-fill only for filter stability on isolated NaNs; outputs stay NaN where input invalid.
+    if not valid_mask.all():
+        obs = pd.Series(obs).ffill().bfill().to_numpy(dtype=float)
+
+    process_var = 1e-5
+    obs_var = 1e-3
+    kf = KalmanFilter(
+        transition_matrices=np.array([[1.0, 1.0], [0.0, 1.0]]),
+        observation_matrices=np.array([[1.0, 0.0]]),
+        initial_state_mean=np.array([obs[first_valid], 0.0]),
+        initial_state_covariance=np.eye(2),
+        transition_covariance=process_var * np.eye(2),
+        observation_covariance=np.array([[obs_var]]),
+    )
+    state_means, state_covs = kf.filter(obs)
+    filtered_log = state_means[:, 0]
+    log_level.iloc[:] = np.where(valid_mask, filtered_log, np.nan)
+    trend.iloc[:] = np.where(valid_mask, state_means[:, 1], np.nan)
+    state_var.iloc[:] = np.where(valid_mask, state_covs[:, 0, 0], np.nan)
+    price.iloc[:] = np.where(valid_mask, np.exp(filtered_log), np.nan)
+    return price, log_level, trend, state_var
+
+
+_KALMAN_CACHE_COLS = (
+    "_kalman_price_raw",
+    "_kalman_log_raw",
+    "_kalman_trend_raw",
+    "_kalman_state_var_raw",
+)
+
+
+def _get_kalman_cache(
+    df: pd.DataFrame,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Reuse pipeline cache when present; otherwise run the filter once."""
+    if all(c in df.columns for c in _KALMAN_CACHE_COLS):
+        return (
+            df["_kalman_price_raw"],
+            df["_kalman_log_raw"],
+            df["_kalman_trend_raw"],
+            df["_kalman_state_var_raw"],
+        )
+    return _kalman_medium_filter(df["Close"])
+
+
+def add_kalman_price_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    price, log_level, trend, state_var = _kalman_medium_filter(out["Close"])
+    # Cache intermediate filter outputs for sibling Kalman steps in the same pipeline run.
+    out["_kalman_price_raw"] = price
+    out["_kalman_log_raw"] = log_level
+    out["_kalman_trend_raw"] = trend
+    out["_kalman_state_var_raw"] = state_var
+    out["kalman_price_medium"] = price.shift(1)
+    return out
+
+
+def add_kalman_ret_1d_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    price, _, _, _ = _get_kalman_cache(out)
+    out["kalman_ret_1d_medium"] = price.pct_change().shift(1)
+    return out
+
+
+def add_kalman_trend_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    _, _, trend, _ = _get_kalman_cache(out)
+    out["kalman_trend_medium"] = trend.shift(1)
+    return out
+
+
+def add_kalman_resid_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    _, log_level, _, _ = _get_kalman_cache(out)
+    close = pd.to_numeric(out["Close"], errors="coerce").astype(float)
+    log_close = np.log(close.where(close > 0))
+    out["kalman_resid_medium"] = (log_close - log_level).shift(1)
+    return out
+
+
+def add_kalman_resid_zscore_medium(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    out = df.copy()
+    _, log_level, _, _ = _get_kalman_cache(out)
+    close = pd.to_numeric(out["Close"], errors="coerce").astype(float)
+    log_close = np.log(close.where(close > 0))
+    resid = log_close - log_level
+    mu = resid.rolling(window, min_periods=window).mean()
+    sigma = resid.rolling(window, min_periods=window).std()
+    out["kalman_resid_zscore_medium"] = ((resid - mu) / sigma.replace(0, np.nan)).shift(1)
+    return out
+
+
+def add_kalman_state_var_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    _, _, _, state_var = _get_kalman_cache(out)
+    out["kalman_state_var_medium"] = state_var.shift(1)
+    return out
+
+
+def add_close_to_kalman_medium(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    price, _, _, _ = _get_kalman_cache(out)
+    close = pd.to_numeric(out["Close"], errors="coerce")
+    out["close_to_kalman_medium"] = ((close - price) / price.replace(0, np.nan)).shift(1)
+    # Drop cache columns after the last Kalman step.
+    drop_cols = [c for c in _KALMAN_CACHE_COLS if c in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    return out

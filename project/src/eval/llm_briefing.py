@@ -184,7 +184,7 @@ def _generate_and_review_brief(lean_shap_context: dict[str, Any]) -> dict[str, A
         "Lean SHAP Context (JSON):\n"
         f"{context_json}\n"
     )
-    generator_output = _call_google_llm(generator_prompt)
+    generator_output = """_call_google_llm(generator_prompt)"""
 
     reviewer_prompt = (
         f"{reviewer_template}\n\n"
@@ -193,10 +193,10 @@ def _generate_and_review_brief(lean_shap_context: dict[str, Any]) -> dict[str, A
         "Candidate Brief (Node0 Output):\n"
         f"{generator_output}\n"
     )
-    reviewer_output = _call_google_llm(reviewer_prompt)
-    review_payload = _parse_review_response(reviewer_output)
-    status = str(review_payload.get("status", "rejected")).lower()
-    final_brief = str(review_payload.get("final_brief", generator_output))
+    reviewer_output = """_call_google_llm(reviewer_prompt)"""
+    review_payload = """_parse_review_response(reviewer_output)"""
+    status = """str(review_payload.get("status", "rejected")).lower()"""
+    final_brief = """str(review_payload.get("final_brief", generator_output))"""
 
     return {
         "generator_output": generator_output,
@@ -207,7 +207,23 @@ def _generate_and_review_brief(lean_shap_context: dict[str, Any]) -> dict[str, A
     }
 
 
-def build_llm_briefing(run_dir: Path) -> dict[str, Any]:
+def build_llm_briefing(
+    run_dir: Path,
+    *,
+    shap_max_samples: int | None = None,
+) -> dict[str, Any]:
+    """Build an LLM briefing using SHAP explainability for the last OOF sample.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Training run directory containing ``data/X.csv`` and the model bundle.
+    shap_max_samples : int or None
+        Maximum background samples for ``shap.LinearExplainer``.
+        * ``None`` (default) – let SHAP choose (warns when dataset is large);
+        * ``>0``               – explicitly use that many (suppresses warning);
+        * ``<=0``              – use all samples.
+    """
     try:
         import shap
     except Exception as exc:
@@ -235,6 +251,16 @@ def build_llm_briefing(run_dir: Path) -> dict[str, Any]:
     pred_idx = np.argmax(proba, axis=1).astype(int)
     class_names = ["contracting", "expanding"] if proba.shape[1] == 2 else None
 
+    # ── determine max_samples for LinearExplainer ───────────────────
+    # SHAP 0.52.0: max_samples must be set on the masker, not passed as kwarg
+    background_data = X_scaled
+    masker_kw: dict[str, Any] = {}
+    if shap_max_samples is not None and shap_max_samples > 0:
+        masker_kw["max_samples"] = min(shap_max_samples, X_scaled.shape[0])
+    elif shap_max_samples is None:
+        # User requested all samples; pass the full row count
+        masker_kw["max_samples"] = X_scaled.shape[0]
+
     try:
         if model_name in {"xgb", "lgbm"}:
             explainer = shap.TreeExplainer(model)
@@ -242,8 +268,10 @@ def build_llm_briefing(run_dir: Path) -> dict[str, Any]:
                 X_scaled_df if model_name == "lgbm" else X_scaled
             )
         else:
-            explainer = shap.LinearExplainer(model, X_scaled)
-            shap_values = explainer.shap_values(X_scaled)
+            # Use an explicit masker so max_samples takes effect in SHAP 0.52+
+            masker = shap.maskers.Independent(background_data[:1], **masker_kw)
+            explainer = shap.LinearExplainer(model, masker)
+            shap_values = explainer.shap_values(background_data)
         lean_context = _extract_lean_shap_context(
             shap_values,
             pred_idx,

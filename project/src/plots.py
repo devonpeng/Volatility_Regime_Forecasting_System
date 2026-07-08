@@ -247,17 +247,82 @@ def plot_asymmetric_loss_matrix(
     plt.close(fig)
 
 
-def plot_optuna_history(study, output_path: Path) -> None:
-    trials = study.trials
-    values = [t.value for t in trials if t.value is not None]
-    trial_nums = [t.number for t in trials if t.value is not None]
+def plot_optuna_history(study, output_path: Path, model_name: str | None = None) -> None:
+    trials = list(study.trials)
+    complete_trials = [t for t in trials if t.value is not None]
+    complete_trial_nums = [t.number for t in complete_trials]
+    complete_values = [t.value for t in complete_trials]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(trial_nums, values, marker="o", linestyle="-", color="#1f77b4", markersize=4)
+    if complete_trial_nums:
+        ax.plot(
+            complete_trial_nums,
+            complete_values,
+            marker="o",
+            linestyle="-",
+            color="#1f77b4",
+            markersize=4,
+            label="Complete",
+        )
+
+    state_style = {
+        "PRUNED": {"color": "#ff7f0e", "marker": "x", "label": "Pruned"},
+        "FAIL": {"color": "#d62728", "marker": "s", "label": "Fail"},
+    }
+    fallback_state_styles = [
+        {"color": "#9467bd", "marker": "^"},
+        {"color": "#8c564b", "marker": "D"},
+        {"color": "#7f7f7f", "marker": "P"},
+    ]
+    fallback_idx = 0
+
+    y_min = min(complete_values) if complete_values else 0.0
+    y_max = max(complete_values) if complete_values else 1.0
+    span = max(y_max - y_min, 0.05)
+    marker_base_y = y_min - 0.08 * span
+    marker_step = 0.05 * span
+    marker_level = 0
+
+    for state_name in sorted({getattr(t.state, "name", str(t.state)) for t in trials}):
+        if state_name == "COMPLETE":
+            continue
+        state_trials = [t.number for t in trials if getattr(t.state, "name", str(t.state)) == state_name]
+        if not state_trials:
+            continue
+
+        style = state_style.get(state_name)
+        if style is None:
+            fallback = fallback_state_styles[fallback_idx % len(fallback_state_styles)]
+            style = {
+                "color": fallback["color"],
+                "marker": fallback["marker"],
+                "label": state_name.title(),
+            }
+            fallback_idx += 1
+
+        y_values = np.full(len(state_trials), marker_base_y - marker_level * marker_step)
+        marker_level += 1
+        ax.scatter(
+            state_trials,
+            y_values,
+            color=style["color"],
+            marker=style["marker"],
+            s=32,
+            label=style["label"],
+        )
+
     ax.set_xlabel("Trial")
     ax.set_ylabel("CV AUC")
-    ax.set_title("Optuna Optimization History")
+    title_suffix = f" - {model_name}" if model_name else ""
+    ax.set_title(f"Optuna Optimization History{title_suffix}")
     ax.grid(alpha=0.3)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="best")
+
+    # Keep non-complete state markers visible below the main metric range.
+    extra_levels = max(marker_level, 1)
+    ax.set_ylim(marker_base_y - extra_levels * marker_step - 0.02 * span, y_max + 0.05 * span)
+
     plt.tight_layout()
     fig.savefig(output_path, dpi=120)
     plt.close(fig)

@@ -1,12 +1,10 @@
 from project.src.utils.cache import get_data_dir
 import matplotlib.pyplot as plt
-import os
-import time
 import pandas as pd
 import seaborn as sns
-from typing import Generator, Literal, Optional, Tuple
+from typing import Generator, Literal, Tuple
 import numpy as np
-
+from methodtools import lru_cache
 
 class TimeSeriesSplitWithPurge:
     """
@@ -23,8 +21,17 @@ class TimeSeriesSplitWithPurge:
         expanding: bool = False,
         alignment: Literal["left", "right"] = "right",
     ):
-        if n_splits < 1:
-            raise ValueError("n_splits must be >= 1")
+        """
+        n_splits: number of splits, if -1, use all possible splits
+        train_window_size: size of train window
+        test_size: size of test window
+        gap_size: size of gap between train and test
+        auto_adjust: if True, auto adjust the number of splits to fit the data
+        expanding: if True, the train window is expanding
+        alignment: if "left", the train window is aligned to the left, if "right", the train window is aligned to the right
+        """
+        if n_splits < 1 and n_splits != -1:
+            raise ValueError("n_splits must be >= 1, or -1")
         if alignment not in ("left", "right"):
             raise ValueError('alignment must be "left" or "right"')
         self.n_splits = n_splits
@@ -34,19 +41,27 @@ class TimeSeriesSplitWithPurge:
         self.auto_adjust = auto_adjust
         self.expanding = expanding
         self.alignment = alignment
+    
 
-    def split(
-        self, X, y=None, groups=None
-    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
-
+    @staticmethod
+    def _n_samples(X) -> int:
         if isinstance(X, (pd.DataFrame, pd.Series)):
-            n_samples = len(X)
-        else:
-            n_samples = X.shape[0]
+            return len(X)
+        return int(X.shape[0])
 
+    @lru_cache(maxsize=128)
+    def _cached_splits(
+        self, n_samples: int
+    ) -> Tuple[Tuple[np.ndarray, np.ndarray], ...]:
+        """Cache folds by sample count; X content is unused by the splitter."""
         max_possible_splits = (
             n_samples - self.train_window_size - self.gap_size
         ) // self.test_size
+
+        if self.n_splits == -1:
+            n_splits = max_possible_splits
+        else:
+            n_splits = min(self.n_splits, max_possible_splits)
 
         if max_possible_splits < 1:
             raise ValueError(
@@ -75,6 +90,7 @@ class TimeSeriesSplitWithPurge:
             # Anchor to oldest data: start from index 0, drop trailing samples
             start_offset = 0
 
+        folds: list[Tuple[np.ndarray, np.ndarray]] = []
         for split_idx in range(n_splits):
             train_start = split_idx * self.test_size + start_offset
             train_end = train_start + self.train_window_size
@@ -90,8 +106,14 @@ class TimeSeriesSplitWithPurge:
 
             train_idx = np.arange(train_start, train_end)
             test_idx = np.arange(test_start, test_end)
+            folds.append((train_idx, test_idx))
 
-            yield train_idx, test_idx
+        return tuple(folds)
+
+    def split(
+        self, X, y=None, groups=None
+    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
+        yield from self._cached_splits(self._n_samples(X))
 
     def get_n_splits(self, X=None, y=None, groups=None):
         return self.n_splits

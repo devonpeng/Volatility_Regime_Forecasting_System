@@ -19,4 +19,7 @@ dependencies = [
     "streamlit>=1.58.0",
     "xgboost>=3.3.0",
     "yfinance>=1.4.1",
+    "arch>=8.0.0",
+    "pykalman>=0.11.2",
+    "methodtools>=0.4.7",
 ]

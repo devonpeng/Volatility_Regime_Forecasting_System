@@ -13,7 +13,7 @@ from project.src.models.registry import MODEL_REGISTRY
 from project.src.pipline import RVPipeline
 
 
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace):
     pipeline = RVPipeline(
         symbol=args.symbol,
         start_date=args.start,
@@ -31,6 +31,7 @@ def main(args: argparse.Namespace) -> None:
         test_size=args.test_size,
         gap_size=args.gap_size,
         output_dir=args.output_dir,
+        force_rebuild_features=args.force_rebuild_features,
     )
 
     result = pipeline.run()
@@ -52,6 +53,7 @@ def main(args: argparse.Namespace) -> None:
         print(f"  {model_result.name:10s}  AUC={model_result.best_auc:.4f}")
     print(f"\nRun dir     : {result.run_dir}")
     print(f"Plots dir   : {result.plot_dir}")
+    return result
 
 
 if __name__ == "__main__":
@@ -99,6 +101,11 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Optional parent directory for run folders (default: cache/runs)",
+    )
+    parser.add_argument(
+        "--force-rebuild-features",
+        action="store_true",
+        help="Ignore shared dataset cache and rebuild/save full features",
     )
     args = parser.parse_args()
     if args.feature_selection == "none":
