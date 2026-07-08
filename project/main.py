@@ -46,7 +46,10 @@ CONFIG = {
     "eval": {
         "baselines": None,      # None = all available; e.g. ["prior", "rv_persist"]
         "shap_max_samples": -1, # LinearExplainer background sample size
-    }, 
+        "regime_method": "kmeans",  # quantile|gmm|kmeans|agglomerative|birch|all
+        "n_regimes": 2,             # number of macro clusters
+        "save_dir": None,           # None → {run_dir}/plots/
+    },
 }
 
 
@@ -60,11 +63,19 @@ def main() -> None:
         raise RuntimeError("Training finished without a run_dir; cannot run eval")
 
     # Pass eval knobs to evaluation
-    baselines = CONFIG["eval"]["baselines"]
-    shap_max = CONFIG["eval"]["shap_max_samples"]
+    eval_cfg = CONFIG["eval"]
+    baselines = eval_cfg["baselines"]
+    shap_max = eval_cfg["shap_max_samples"]
     if shap_max is not None and shap_max <= 0:
         shap_max = None
-    evaluate(result.run_dir, baselines=baselines, shap_max_samples=shap_max)
+    evaluate(
+        result.run_dir,
+        baselines=baselines,
+        shap_max_samples=shap_max,
+        save_dir=eval_cfg.get("save_dir"),
+        regime_method=eval_cfg.get("regime_method", "kmeans"),
+        n_regimes=int(eval_cfg.get("n_regimes", 2)),
+    )
 
 
 if __name__ == "__main__":

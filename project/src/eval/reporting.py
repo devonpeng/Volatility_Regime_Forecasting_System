@@ -9,7 +9,13 @@ import numpy as np
 from project.src.data.spliter import TimeSeriesSplitWithPurge
 from project.src.eval.data import load_run_data
 from project.src.eval.llm_briefing import build_llm_briefing
-from project.src.eval.regime import build_macro_regime_labels, group_confusion_matrices
+from project.src.eval.regime import (
+    REGIME_METHOD_NAMES,
+    build_macro_indicator,
+    build_macro_regime_labels,
+    group_confusion_matrices,
+    ordered_group_keys,
+)
 from project.src.metrics import (
     brier_score,
     diebold_mariano_test,
@@ -154,12 +160,96 @@ def _evaluate_baseline(
     }
 
 
+def _build_one_regime_split(
+    oof_valid_df,
+    pipeline_config: dict[str, Any],
+    *,
+    method: str,
+    n_regimes: int,
+    clusterer: Any | None = None,
+    macro_indicator=None,
+    indicator_name: str | None = None,
+    indicator_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fit one clustering method and return a serialisable regime_split dict."""
+    if macro_indicator is None or indicator_name is None or indicator_meta is None:
+        regimes, indicator_name, indicator_meta, macro_indicator, cluster_meta = (
+            build_macro_regime_labels(
+                oof_valid_df,
+                pipeline_config,
+                ma_window=30,
+                method=method,
+                n_regimes=n_regimes,
+                clusterer=clusterer,
+            )
+        )
+    else:
+        from project.src.eval.regime import assign_regime_clusters
+
+        regimes, cluster_meta = assign_regime_clusters(
+            macro_indicator.to_numpy(dtype=float),
+            method=method,
+            n_regimes=n_regimes,
+            clusterer=clusterer,
+            index=oof_valid_df.index,
+        )
+
+    df = oof_valid_df.copy()
+    df["Regime"] = regimes
+    gcm = group_confusion_matrices(
+        df,
+        group_col="Regime",
+        y_col="y",
+        proba_col="model_proba",
+        threshold=0.5,
+    )
+    # Overall CM alongside per-cluster matrices
+    overall_cm = group_confusion_matrices(
+        df.assign(Regime="Overall"),
+        group_col="Regime",
+        y_col="y",
+        proba_col="model_proba",
+        threshold=0.5,
+    ).get("Overall")
+    if overall_cm is not None:
+        ordered_gcm: dict[str, Any] = {"Overall": overall_cm}
+        for key in ordered_group_keys(gcm):
+            ordered_gcm[key] = gcm[key]
+        gcm = ordered_gcm
+
+    split: dict[str, Any] = {
+        "macro_indicator": indicator_name,
+        "macro_indicator_details": indicator_meta,
+        "method": cluster_meta.get("method", method),
+        "method_display": cluster_meta.get("method_display", method),
+        "n_regimes": int(cluster_meta.get("n_regimes", n_regimes)),
+        "threshold_rule": cluster_meta.get("threshold_rule", "cluster_mean_descending"),
+        "cluster_order": cluster_meta.get("cluster_order", []),
+        "cluster_means": cluster_meta.get("cluster_means", {}),
+        "group_confusion_matrices": gcm,
+        "_Regime": regimes.tolist(),
+        "raw_" + indicator_name: macro_indicator.tolist(),
+    }
+    # Flatten a few scalar indicator flags for convenience
+    for key, value in indicator_meta.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            split[key] = value
+    # Optional algo-specific extras (edges, raw means)
+    for key in ("quantile_edges", "raw_means", "raw_centers", "clusterer_type"):
+        if key in cluster_meta:
+            split[key] = cluster_meta[key]
+    return split
+
+
 def run_dm_evaluation(
     run_dir: Path,
     *,
     save_report: bool = True,
     baselines: list[str] | None = None,
     shap_max_samples: int | None = None,
+    regime_method: str = "kmeans",
+    n_regimes: int = 2,
+    clusterer: Any | None = None,
 ) -> dict[str, Any]:
     y_valid, model_proba, horizon, oof_valid_df, best_model_name, pipeline_config = load_run_data(
         run_dir
@@ -195,6 +285,22 @@ def run_dm_evaluation(
     if prior_entry is None:
         prior_entry = baselines_out[0] if baselines_out else {"name": "none", "metrics": {"brier": 0.0, "log_loss": 0.0}}
 
+    if n_regimes < 2:
+        raise ValueError(f"n_regimes must be >= 2, got {n_regimes}")
+
+    method_key = (regime_method or "kmeans").strip().lower()
+    if clusterer is not None:
+        methods_to_run = ["custom"]
+    elif method_key == "all":
+        methods_to_run = list(REGIME_METHOD_NAMES)
+    elif method_key in REGIME_METHOD_NAMES:
+        methods_to_run = [method_key]
+    else:
+        raise ValueError(
+            f"Unknown regime_method '{regime_method}'. "
+            f"Valid: {list(REGIME_METHOD_NAMES) + ['all']}"
+        )
+
     report: dict[str, Any] = {
         "baseline": prior_entry["name"],
         "dm_variance_settings": {
@@ -212,35 +318,44 @@ def run_dm_evaluation(
         "dm_log_loss": prior_entry["dm_log_loss"],
         "baselines_compared": baselines_out,
         "baseline_notes": baseline_notes,
-        # ── fields for programmatic access / plotting (not serialised) ──
+        "regime_method": method_key if clusterer is None else "custom",
+        "n_regimes": int(n_regimes),
+        # ── fields for programmatic access / plotting ──
         "_y_valid": y_valid.tolist(),
         "_model_proba": model_proba.tolist(),
     }
 
-    regimes, regime_threshold, regime_indicator_name, regime_indicator_meta, macro_indicator_raw = build_macro_regime_labels(
-        oof_valid_df,
-        pipeline_config,
-        ma_window=30,
+    # Build macro once; reuse across methods when running `all`
+    macro_indicator, indicator_name, indicator_meta = build_macro_indicator(
+        oof_valid_df, pipeline_config, ma_window=30
     )
-    oof_valid_df["Regime"] = regimes
-    report["regime_split"] = {
-        "macro_indicator": regime_indicator_name,
-        "macro_indicator_details": regime_indicator_meta,
-        "threshold_rule": "median_of_macro_indicator",
-        "threshold_value": regime_threshold,
-        "group_confusion_matrices": group_confusion_matrices(
+
+    regime_splits: dict[str, Any] = {}
+    for m in methods_to_run:
+        split = _build_one_regime_split(
             oof_valid_df,
-            group_col="Regime",
-            y_col="y",
-            proba_col="model_proba",
-            threshold=0.5,
-        ),
-    }
-    # Store regime vector & raw VIX series for downstream plotting (JSON-serialisable)
-    report["regime_split"]["_Regime"] = regimes.tolist()
-    report["regime_split"].update({k: v for k, v in regime_indicator_meta.items() if isinstance(v, (str, int, float, bool))})
-    report["regime_split"]["raw_" + regime_indicator_name] = macro_indicator_raw.tolist()
-    # Save Date column for downstream plotting
+            pipeline_config,
+            method="kmeans" if m == "custom" else m,
+            n_regimes=n_regimes,
+            clusterer=clusterer if m == "custom" else None,
+            macro_indicator=macro_indicator,
+            indicator_name=indicator_name,
+            indicator_meta=indicator_meta,
+        )
+        # When custom, method inside split is already "custom"
+        store_key = split.get("method", m)
+        regime_splits[store_key] = split
+
+    report["regime_splits"] = regime_splits
+    # Backward-compatible primary split (first method; prefer kmeans if present)
+    primary_key = (
+        "kmeans"
+        if "kmeans" in regime_splits
+        else next(iter(regime_splits))
+    )
+    report["regime_split"] = regime_splits[primary_key]
+    report["primary_regime_method"] = primary_key
+
     if "Date" in oof_valid_df:
         report["_dates"] = oof_valid_df["Date"].tolist()
     report["llm_briefing"] = build_llm_briefing(run_dir, shap_max_samples=shap_max_samples)
@@ -307,21 +422,36 @@ def print_report(report: dict[str, Any]) -> None:
 
     if "report_path" in report:
         print(f"\nReport saved to: {report['report_path']}")
-    print("\n=== Regime-based Confusion Matrices ===")
-    split = report.get("regime_split", {})
-    print(
-        f"Macro indicator: {split.get('macro_indicator')} "
-        f"(threshold={split.get('threshold_value', 0.0):.6f})"
-    )
-    macro_meta = split.get("macro_indicator_details", {})
-    if macro_meta.get("used_fallback"):
-        print(
-            "Macro indicator note: fallback was used because external ^VIX data was unavailable "
-            f"or unalignable ({macro_meta.get('reason', 'unknown reason')})."
-        )
-    for regime, stats in split.get("group_confusion_matrices", {}).items():
-        print(f"\n{regime}: n={stats['n_samples']}")
-        print(f"  confusion_matrix [[tn, fp], [fn, tp]] = {stats['confusion_matrix']}")
+
+    regime_splits = report.get("regime_splits") or {}
+    if not regime_splits and report.get("regime_split"):
+        primary = report.get("primary_regime_method") or report["regime_split"].get("method", "regime")
+        regime_splits = {primary: report["regime_split"]}
+
+    for method_key, split in regime_splits.items():
+        display = split.get("method_display", method_key)
+        n_reg = split.get("n_regimes", report.get("n_regimes", "?"))
+        print(f"\n=== Regime-based Confusion Matrices — {display} (n={n_reg}) ===")
+        print(f"Macro indicator: {split.get('macro_indicator')}")
+        print(f"Method         : {display} | rule={split.get('threshold_rule')}")
+        means = split.get("cluster_means") or {}
+        if means:
+            means_str = ", ".join(f"{k}={v:.4f}" for k, v in means.items())
+            print(f"Cluster means  : {means_str}")
+        macro_meta = split.get("macro_indicator_details", {})
+        if macro_meta.get("used_fallback"):
+            print(
+                "Macro indicator note: fallback was used because external ^VIX data was unavailable "
+                f"or unalignable ({macro_meta.get('reason', 'unknown reason')})."
+            )
+        gcm = split.get("group_confusion_matrices", {})
+        for regime in ordered_group_keys(gcm):
+            stats = gcm[regime]
+            mean_note = ""
+            if regime in means:
+                mean_note = f", mean={means[regime]:.4f}"
+            print(f"\n{regime}: n={stats['n_samples']}{mean_note}")
+            print(f"  confusion_matrix [[tn, fp], [fn, tp]] = {stats['confusion_matrix']}")
 
     llm = report.get("llm_briefing", {})
     if llm:

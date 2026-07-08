@@ -467,7 +467,7 @@ class RVPipeline:
         plot_dir = self.plot_all()
         run_dir = self.save_artifacts()
 
-        from project.eval import run_dm_evaluation
+        from project.src.eval.reporting import run_dm_evaluation
 
         run_dm_evaluation(run_dir, save_report=True)
 

@@ -13,7 +13,8 @@
 
 - 顶层（`project/`）
   - `train.py`: 训练入口 CLI
-  - `eval.py`: 评估入口 CLI（薄入口，委托 `src/evaluation/reporting.py`）
+  - `eval.py`: 评估入口 CLI（薄入口，委托 `src/eval/reporting.py` + `src/eval/plots.py`）
+  - `main.py`: 训练 → 评估一键入口（顶部 `CONFIG` dict）
   - `prompts/eval_llm_prompts.md`: LLM 生成/审核 Prompt 模板
   - `cache/`: 训练与评估产物缓存目录
   - `src/`: 主要业务代码
@@ -39,7 +40,8 @@
   - `baseline.py`: baseline 与 per-observation loss
 - `src/eval/`（评估流程实现）
   - `data.py`: 读取 run artifacts（`y.csv` / `oof_predictions.csv` / `pipeline.json`）
-  - `regime.py`: VIX regime 划分与分组混淆矩阵
+  - `regime.py`: 宏观指标（VIX MA30）聚类划分 + 分组混淆矩阵
+  - `plots.py`: 评估图（CM / timeline / cluster scatter / comparison）
   - `llm_briefing.py`: SHAP 降维、双 Agent 生成/审核、fallback
   - `reporting.py`: `run_dm_evaluation()` 与终端输出
 - `src/evaluation/`: 对外稳定导出层（避免 `eval` 包名冲突）
@@ -117,32 +119,39 @@ uv run python train.py \
 
 | 参数 | 类型 | 默认值 | 用途 |
 |---|---|---|---|
-| `--run-dir` | `str` | 无（必填） | 指向单次训练产物目录（通常位于 `cache/runs/<run-id>`），用于 DM 评估与 LLM briefing |
+| `--run-dir` | `str` | 无（必填） | 指向单次训练产物目录（通常位于 `cache/runs/<run-id>`），用于 DM 评估、regime CM 与 LLM briefing |
 | `--baselines` | `str` | 空（全部运行） | 逗号或空格分隔，如 `prior,rv_persist,garch`。合法值：`prior`, `rv_persist`, `garch` |
 | `--shap-max-samples` | `int` | `100` | LinearExplainer 背景样本上限；传 `<=0` 表示用全量样本（消除 SHAP 警告） |
+| `--regime-method` | `str` | `"kmeans"` | 宏观指标聚类方法。候选：`quantile` / `gmm` / `kmeans` / `agglomerative` / `birch` / `all`（一次跑全部并额外出 comparison 图） |
+| `--n-regimes` | `int` | `2` | 聚类簇数 / 分位箱数（必须 `>= 2`）。簇按 **宏观指标均值从高到低** 重标为 `Cluster_1` … `Cluster_n` |
+| `--save-dir` | `str` | 空 → `{run_dir}/plots/` | 评估 PNG 输出目录；文件名始终带 method 与 n，如 `confusion_matrices_kmeans_n2.png` |
 
 ### `main.py`
 
-默认无 CLI 参数（训练配置通过顶部 `CONFIG` dict 调整）。也支持传入 `--baselines` 和 `--shap-max-samples` 覆盖评估行为：
+默认无 CLI 参数。训练与评估配置都在顶部 `CONFIG` dict 中调整：
 
 ```bash
 uv run python main.py
 ```
 
-会先跑完整训练并打印训练摘要，再用产出的 `run_dir` 自动串联 DM 评估并打印评估报告。
+会先跑完整训练，再用产出的 `run_dir` 自动调用 `evaluate()`（DM + regime CM + 默认落盘到 `{run_dir}/plots/`）。
 
-#### `main.py` 可选 CLI 参数
+相关 `CONFIG["eval"]` 字段：
 
-| 参数 | 类型 | 默认值 | 用途 |
-|---|---|---|---|
-| `--baselines` | `str` | 空（全部运行） | 逗号或空格分隔，如 `prior,rv_persist,garch`。直接覆盖 CONFIG 中的 `_eval_baselines` |
-| `--shap-max-samples` | `int` | CONFIG 中指定（通常 100） | LinearExplainer 背景样本上限；`<=0` 表示用全量 |
+| 键 | 默认值 | 用途 |
+|---|---|---|
+| `baselines` | `None`（全部） | 如 `["prior", "rv_persist"]` |
+| `shap_max_samples` | `-1`（全量） | SHAP 背景样本上限；`<=0` → 全量 |
+| `regime_method` | `"kmeans"` | 同 `eval.py --regime-method` |
+| `n_regimes` | `2` | 同 `eval.py --n-regimes` |
+| `save_dir` | `None` | `None` → `{run_dir}/plots/` |
 
-示例：
+单独评估示例：
 
 ```bash
-uv run python main.py --baselines prior,garch
-uv run python main.py --shap-max-samples 200 --baselines "prior rv_persist"
+uv run python eval.py --run-dir cache/runs/<your-run-dir> --regime-method kmeans --n-regimes 2
+uv run python eval.py --run-dir cache/runs/<your-run-dir> --regime-method all --n-regimes 3
+uv run python eval.py --run-dir cache/runs/<your-run-dir> --baselines prior,garch --shap-max-samples 0
 ```
 
 ## 3) 如何通过代码调用并训练（Python API）
@@ -186,31 +195,87 @@ pipeline.tune_model("logistic")
 ```bash
 cd project
 uv run python eval.py --run-dir cache/runs/<your-run-dir>
+uv run python eval.py --run-dir cache/runs/<your-run-dir> --regime-method gmm --n-regimes 3
+uv run python eval.py --run-dir cache/runs/<your-run-dir> --regime-method all --n-regimes 2
 ```
 
 输出包括：
 
-- DM 检验（Brier / Log-loss）
-- Regime 分组混淆矩阵
+- DM 检验（Brier / Log-loss，按所选 baseline）
+- Regime 分簇混淆矩阵（`Overall` + `Cluster_1`…`Cluster_n`，按簇内宏观指标均值从高到低）
+- 评估图（默认写入 `{run_dir}/plots/`）
 - `llm_briefing`（极简 SHAP + 双 Agent 审核结果）
+- JSON：`{run_dir}/config/dm_test_report.json`
+
+### Regime 聚类（宏观指标 = VIX）
+
+所有方法都在同一维宏观序列上分簇：优先 `^VIX` 的 30 日滚动均值；拉不到则用 OOF `Close` 的年化滚动波动再 MA30 作为 fallback。
+
+| `--regime-method` | 行为 |
+|---|---|
+| `quantile` | 等频分位切成 `n` 箱，再按均值降序重标号 |
+| `gmm` | `GaussianMixture(n_components=n)`，按 `means_` 降序重标号 |
+| `kmeans`（默认） | `KMeans(n_clusters=n)`，按簇均值降序重标号 |
+| `agglomerative` | `AgglomerativeClustering(n_clusters=n)`，按均值降序重标号 |
+| `birch` | `Birch(n_clusters=n)`，按均值降序重标号 |
+| `all` | 上述五种各跑一遍；各自出 CM/timeline/scatter，并额外写 `cluster_comparison_n{N}.png` |
+
+重标规则（所有方法统一）：算每簇在宏观序列上的均值 → 从高到低记为 `Cluster_1` … `Cluster_n` → 对每簇分别算 confusion matrix（再加 Overall）。
+
+### 评估图文件名
+
+| 产物 | 文件名 |
+|---|---|
+| 分簇混淆矩阵 | `confusion_matrices_{method}_n{N}.png` |
+| 时间轴着色 | `macro_regime_timeline_{method}_n{N}.png` |
+| 经典 cluster scatter | `cluster_scatter_{method}_n{N}.png` |
+| 多方法对照（仅 `all`） | `cluster_comparison_n{N}.png` |
+
+图标题同样带方法名与 `n`，例如 `Confusion Matrices — KMeans (n=2)`。
 
 ### Python API 用法
 
 ```python
 from pathlib import Path
 from project.src.evaluation.reporting import run_dm_evaluation, print_report
+from project.eval import evaluate
 
-report = run_dm_evaluation(Path("cache/runs/<your-run-dir>"), save_report=True)
+# 仅算报告（不含默认绘图封装）
+report = run_dm_evaluation(
+    Path("cache/runs/<your-run-dir>"),
+    save_report=True,
+    regime_method="kmeans",
+    n_regimes=2,
+)
 print_report(report)
+
+# 推荐入口：DM + 打印 + 默认写到 {run_dir}/plots/
+evaluate(
+    "cache/runs/<your-run-dir>",
+    regime_method="all",
+    n_regimes=3,
+)
+
+# 自定义 sklearn 聚类器（任意 fit/predict 或 fit_predict）
+from sklearn.cluster import SpectralClustering
+evaluate(
+    "cache/runs/<your-run-dir>",
+    n_regimes=2,
+    clusterer=SpectralClustering(n_clusters=2, affinity="nearest_neighbors"),
+)
 ```
+
+`regime_method="all"` 时，报告里有 `regime_splits[<method>]`；`regime_split` 仍指向主方法（优先 `kmeans`）以保持兼容。
 
 ### 如何改 Eval 的各个环节（按职责改）
 
 - **读取 run 数据**：改 `src/eval/data.py` 的 `load_run_data()`
 - **Regime 划分逻辑**：改 `src/eval/regime.py`
-  - `fetch_vix_ma_series()`: 宏观指标数据源
-  - `build_macro_regime_labels()`: 阈值规则（默认中位数）
-  - `group_confusion_matrices()`: 分组统计细节
+  - `fetch_vix_ma_series()` / `build_macro_indicator()`: 宏观指标数据源与 fallback
+  - `assign_regime_clusters()`: 分簇算法 registry + 均值降序重标号
+  - `build_macro_regime_labels()`: 串联 indicator + clustering
+  - `group_confusion_matrices()`: 分组 CM
+- **评估绘图**：改 `src/eval/plots.py` 的 `save_eval_plots()` 等
 - **LLM 与 SHAP**：改 `src/eval/llm_briefing.py`
   - `_extract_lean_shap_context()`: top-k 特征压缩规则
   - `_generate_and_review_brief()`: 双 Agent 串联逻辑
@@ -467,8 +532,15 @@ cache/
       model/
         best_model.joblib       # 最优模型权重 + scaler + feature_names
       plots/
-        *.png
+        *.png                       # 训练图 + eval 图（CM / timeline / cluster_*）
 ```
+
+训练图由 `src/plots.py` 写入；eval 后还会追加例如：
+
+- `confusion_matrices_kmeans_n2.png`
+- `macro_regime_timeline_kmeans_n2.png`
+- `cluster_scatter_kmeans_n2.png`
+- （`--regime-method all` 时）`cluster_comparison_n2.png`
 
 训练完成后终端会打印 `result.run_dir` 和 `result.plot_dir`。
 
