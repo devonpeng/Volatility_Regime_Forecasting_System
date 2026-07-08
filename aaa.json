@@ -1,0 +1,5 @@
+{
+    "status": "approved",
+    "final_brief": "`[DR]` In this model, downside_rv has a SHAP value of 0.4004274642420753, vol_of_vol has a value of 0.26804987908225236, and ewma_rv has a value of -0.20919584346879797.\`[FI]` These metrics indicate a contracting market regime where downside risk and volatility of volatility are the primary forces driving the consolidation.",
+    "issues": []
+}

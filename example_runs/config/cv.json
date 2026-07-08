@@ -1,0 +1,6 @@
+{
+  "n_splits": 20,
+  "train_window_size": 756,
+  "test_size": 252,
+  "gap_size": 10
+}
