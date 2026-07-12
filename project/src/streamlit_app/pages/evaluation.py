@@ -162,7 +162,7 @@ def render() -> None:
 
     # ── Feature Importance ─────────────────────────────────────────────
     st.subheader("Feature Importance")
-    if st.button("Compute Feature Importance"):
+    if st.button("Compute Feature Importance", type="primary"):
         try:
             from sklearn.preprocessing import RobustScaler
             feature_names = list(X.columns)
@@ -191,7 +191,7 @@ def render() -> None:
 
     # ── LLM Diagnostic Report ──────────────────────────────────────────
     st.subheader("LLM Diagnostic Report")
-    if st.button("Generate LLM Report"):
+    if st.button("Generate LLM Report", type="primary"):
         fi_dict = st.session_state.get("_feature_importances", {})
         metrics_dict = oof_metrics or {}
         try:

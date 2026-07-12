@@ -91,7 +91,7 @@ def render() -> None:
     with col4:
         gap_size = st.number_input("gap_size", 0, 30, st.session_state.get(SS_CV_GAP, 5), 1)
 
-    if st.button("Create CV Object"):
+    if st.button("Create CV Object", type="primary"):
         if X_train is None:
             st.warning("Split data first.")
         else:

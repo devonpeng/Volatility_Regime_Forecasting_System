@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from project.src.models.registry import MODEL_REGISTRY
-from project.src.models.tuner import tune_models
+from project.src.models.tuner import tune_model, tune_models
 from project.src.streamlit_app.session_manager import (
     SS_BEST_MODEL_NAME,
     SS_BEST_PARAMS,
@@ -41,7 +41,7 @@ def render() -> None:
     selected_models = st.multiselect(
         "Select models to train",
         options=available_models,
-        default=["logistic"],
+        default=available_models,
     )
 
     # ── Optuna config ──────────────────────────────────────────────────
@@ -62,25 +62,25 @@ def render() -> None:
         fs_arg = fs_method  # nested feature selection disabled
 
         status_container = st.status("Training models...", expanded=True)
-        with status_container:
-            for model_name in selected_models:
-                st.write(f"Tuning **{model_name}** ({n_trials} trials)...")
-
         progress_bar = st.progress(0)
         results_text = st.empty()
 
         try:
-            results = tune_models(
-                selected_models,
-                X_train,
-                y_train,
-                cv,
-                n_trials=n_trials,
-                feature_selection=fs_arg,
-                top_k_features=top_k,
-                nested_feature_selection=False,
-            )
-            progress_bar.progress(100)
+            results = []
+            for i, model_name in enumerate(selected_models):
+                status_container.write(f"Tuning **{model_name}** ({n_trials} trials)...")
+                result = tune_model(
+                    model_name,
+                    X_train,
+                    y_train,
+                    cv,
+                    n_trials=n_trials,
+                    feature_selection=fs_arg,
+                    top_k_features=top_k,
+                    nested_feature_selection=False,
+                )
+                results.append(result)
+                progress_bar.progress((i + 1) / len(selected_models))
 
             best = max(results, key=lambda r: r.best_auc)
 
