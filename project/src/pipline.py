@@ -67,6 +67,7 @@ class RVPipeline:
         output_dir: str | None = None,
         random_state: int = 42,
         force_rebuild_features: bool = False,
+        early_stop_patience: int = 5,
     ):
         self.symbol = symbol
         self.start_date = start_date
@@ -86,6 +87,7 @@ class RVPipeline:
         self.runs_parent = Path(output_dir) if output_dir else None
         self.random_state = random_state
         self.force_rebuild_features = force_rebuild_features
+        self.early_stop_patience = early_stop_patience
 
         self.run_cache: RunCache | None = None
         self.output_dir: Path | None = None
@@ -108,7 +110,7 @@ class RVPipeline:
         self._loaded_from_dataset_cache: bool = False
 
     def _pipeline_config(self) -> dict:
-        return {
+        cfg = {
             "symbol": self.symbol,
             "start_date": self.start_date,
             "end_date": self.end_date,
@@ -123,6 +125,13 @@ class RVPipeline:
             "random_state": self.random_state,
             "force_rebuild_features": self.force_rebuild_features,
         }
+        # Store all feature step names (before selection) so eval can rebuild cache key
+        try:
+            from project.src.features.core import get_feature_steps
+            cfg["full_feature_names"] = [s.name for s in get_feature_steps()]
+        except Exception:
+            pass
+        return cfg
 
     def _feature_step_names(self) -> list[str]:
         return [step.name for step in get_feature_steps()]
@@ -155,9 +164,9 @@ class RVPipeline:
         )
         if self.raw_df.shape[0] == 0:
             raise ValueError(f"No data found for {self.symbol} from {self.start_date} to {self.end_date}")
-        width, height = self.raw_df.shape
-        if height < 255:
-            print("GARCH warning: fewer than 255 features may lead to unstable results or throw an error.")
+        rows, cols = self.raw_df.shape
+        if rows < 255:
+            print("GARCH warning: fewer than 255 rows may lead to unstable results or throw an error.")
         return self.raw_df
 
     def build_features(self) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
@@ -271,6 +280,9 @@ class RVPipeline:
             self.y,
             self.cv,
             n_trials=self.n_trials,
+            early_stopping=self.n_trials > 50,
+            early_stop_patience=self.early_stop_patience,
+
         )
         self.model_results.append(result)
         return result
@@ -456,6 +468,7 @@ class RVPipeline:
             top_k_features=self.top_k_features,
             nested_feature_selection=self.nested_feature_selection,
             random_state=self.random_state,
+            early_stop_patience=self.early_stop_patience,
         )
 
         best = max(self.model_results, key=lambda r: r.best_auc)

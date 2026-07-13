@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-
+from tqdm.auto import tqdm
 import pandas as pd
 
 from project.src.features.rv import compute_forward_rv
@@ -152,7 +152,10 @@ def apply_features(
     steps = steps or DEFAULT_FEATURE_STEPS
     feature_names: list[str] = []
 
-    for step in steps:
+    pbar = tqdm(steps, desc="Applying features")
+
+    for step in pbar:
+        pbar.set_postfix(feature=step.name)
         data = apply_feature(data, step)
         feature_names.append(step.name)
 

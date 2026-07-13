@@ -19,6 +19,7 @@ def objective_logistic_classifier(
     feature_selection: str | None = None,
     top_k_features: int = 5,
     random_state: int = 42,
+    **kwargs,
 ) -> float:
     logistic_params = {
         "C": trial.suggest_float("C", 1e-2, 10.0, log=True),
