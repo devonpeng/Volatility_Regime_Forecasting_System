@@ -29,15 +29,25 @@ init_session_state()
 
 # ── Sidebar navigation ─────────────────────────────────────────────────
 PAGES = {
-    "📊 Data & Feature": "data_feature",
-    "✂️ Train/Test Split": "train_test",
-    "🤖 Model Training": "model_train",
-    "📈 Evaluation & Insight": "evaluation",
+    "📥 Station 1: ETL": "etl",
+    "🔧 Station 2: Feature Engineering": "feature_eng",
+    "🧠 Station 3: Model Design": "model_design",
+    "📊 Station 4: Implementation": "implementation",
 }
 
-st.sidebar.title("🧪 ML Workbench")
+PAGES_EXTRA = {
+    "DDF ML Pipeline": None,
+    "📐 Feature Comparison": "comparison",
+}
+
+st.sidebar.title("🧪 DDF ML Pipeline")
 page_label = st.sidebar.radio("Navigate", list(PAGES.keys()))
 current_page = PAGES[page_label]
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Reference**")
+extra_label = st.sidebar.radio("", list(PAGES_EXTRA.keys()), key="extra_radio")
+current_extra = PAGES_EXTRA[extra_label]
 
 # ── Session state summary in sidebar ───────────────────────────────────
 st.sidebar.markdown("---")
@@ -48,15 +58,19 @@ st.sidebar.markdown(f"- Train/Test split: {'✅' if has_train_test_split() else 
 st.sidebar.markdown(f"- Model trained: {'✅' if has_model_results() else '❌'}")
 
 # ── Route to the selected page ─────────────────────────────────────────
-if current_page == "data_feature":
-    from project.src.streamlit_app.pages.data_feature import render
+# Reference pages (extra) take priority over main stations
+if current_extra is not None and current_extra == "comparison":
+    from project.src.streamlit_app.pages.comparison import render
     render()
-elif current_page == "train_test":
-    from project.src.streamlit_app.pages.train_test import render
+elif current_page == "etl":
+    from project.src.streamlit_app.pages.data_feature import render_etl
+    render_etl()
+elif current_page == "feature_eng":
+    from project.src.streamlit_app.pages.data_feature import render_feng
+    render_feng()
+elif current_page == "model_design":
+    from project.src.streamlit_app.pages.model_design import render
     render()
-elif current_page == "model_train":
-    from project.src.streamlit_app.pages.model_train import render
-    render()
-elif current_page == "evaluation":
-    from project.src.streamlit_app.pages.evaluation import render
+elif current_page == "implementation":
+    from project.src.streamlit_app.pages.implementation import render
     render()

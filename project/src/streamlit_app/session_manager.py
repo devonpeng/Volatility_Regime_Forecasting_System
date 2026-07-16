@@ -40,12 +40,14 @@ SS_OOF_PROBA_VALID = "oof_proba_valid"
 SS_OOF_TRUE_VALID = "oof_true_valid"
 
 # Page order (used for downstream clearing)
-PAGE_ORDER = ["data_feature", "train_test", "model_train", "evaluation"]
+PAGE_ORDER = ["etl", "feature_eng", "model_design", "implementation"]
 
 # All keys grouped by the page that *sets* them
 _PAGE_KEYS: dict[str, list[str]] = {
-    "data_feature": [
+    "etl": [
         SS_RAW_DF,
+    ],
+    "feature_eng": [
         SS_ENRICHED_DF,
         SS_SELECTED_FEATURES,
         SS_X,
@@ -55,7 +57,7 @@ _PAGE_KEYS: dict[str, list[str]] = {
         SS_HORIZON,
         SS_LABEL_METHOD,
     ],
-    "train_test": [
+    "model_design": [
         SS_TRAIN_RATIO,
         SS_X_TRAIN,
         SS_X_TEST,
@@ -67,7 +69,7 @@ _PAGE_KEYS: dict[str, list[str]] = {
         SS_CV_TEST_SIZE,
         SS_CV_GAP,
     ],
-    "model_train": [
+    "implementation": [
         SS_MODEL_RESULTS,
         SS_BEST_MODEL_NAME,
         SS_BEST_PARAMS,
@@ -102,14 +104,14 @@ def init_session_state() -> None:
         SS_Y_TRAIN: None,
         SS_Y_TEST: None,
         SS_CV: None,
-        SS_CV_N_SPLITS: 5,
+        SS_CV_N_SPLITS: 12,
         SS_CV_TRAIN_WINDOW: 252,
         SS_CV_TEST_SIZE: 21,
         SS_CV_GAP: 5,
         SS_MODEL_RESULTS: None,
         SS_BEST_MODEL_NAME: "",
         SS_BEST_PARAMS: {},
-        SS_N_TRIALS: 10,
+        SS_N_TRIALS: 30,
         SS_FEATURE_SELECTION: None,
         SS_TOP_K: 5,
         SS_OOF_METRICS: None,

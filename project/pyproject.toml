@@ -23,4 +23,5 @@ dependencies = [
     "arch>=7.0.0",
     "pykalman>=0.10.0",
     "methodtools>=0.4.7",
+    "plotly>=5.18.0",
 ]

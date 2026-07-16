@@ -42,8 +42,8 @@ def _get_feature_source(name: str) -> str:
     return inspect.getsource(step.fn)
 
 
-def render() -> None:
-    st.header("Data & Feature Engineering")
+def render_etl() -> None:
+    st.header("📥 Station 1: ETL — Data Loading")
 
     # ── Data loading controls ──────────────────────────────────────────
     with st.expander("Data Source", expanded=True):
@@ -57,13 +57,14 @@ def render() -> None:
         use_synthetic = st.checkbox("Use synthetic data (no network)", value=False)
 
         if st.button("Load Data", type="primary"):
-            clear_downstream("data_feature")
+            clear_downstream("etl")
             with st.spinner("Loading data..."):
                 raw_df = _load_data_cached(
                     symbol, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), use_synthetic
                 )
             st.session_state[SS_RAW_DF] = raw_df
             st.success(f"Loaded {len(raw_df)} rows (source: {raw_df.attrs.get('source', 'unknown')})")
+            st.rerun()
 
     raw_df = st.session_state.get(SS_RAW_DF)
     if raw_df is None:
@@ -79,14 +80,23 @@ def render() -> None:
         st.caption("Tail")
         st.dataframe(raw_df.tail(10), use_container_width=True)
 
+
+def render_feng() -> None:
+    st.header("🔧 Station 2: Feature Engineering")
+
+    raw_df = st.session_state.get(SS_RAW_DF)
+    if raw_df is None:
+        st.warning("Complete Station 1 (ETL) first to load data.")
+        return
+
     # ── Feature selection ──────────────────────────────────────────────
     st.subheader("Feature Selection")
     all_names = [step.name for step in DEFAULT_FEATURE_STEPS]
     # rv_hist_5d / rv_hist_20d are prerequisites for rv_ratio_5_20, rv_accel, vix_rv_spread
     CORE_BASE_FEATURES = ["ret_1d", "rv_hist_5d", "rv_hist_20d"]
-    RECOMMENDED_FEATURES = CORE_BASE_FEATURES + [
+    RECOMMENDED_FEATURES = [
         "parkinson_rv", "vix_level", "vix_term_structure", "kalman_trend_medium",
-        "kalman_price_medium", "kalman_ret_1d_medium", "vix_rv_spread",
+        "ret_1d", "kalman_price_medium", "kalman_ret_1d_medium", "vix_rv_spread",
         "rv_ratio_5_20", "rv_accel", "overnight_ret", "vix_change_1d",
     ]
     def _on_preset_change() -> None:
@@ -128,12 +138,15 @@ def render() -> None:
         if not selected:
             st.warning("Select at least one feature.")
         else:
-            clear_downstream("data_feature")
+            clear_downstream("feature_eng")
             # Auto-inject core base features required by many derived features
             missing_base = [f for f in CORE_BASE_FEATURES if f not in selected]
             if missing_base:
                 selected = missing_base + selected
-                st.info(f"Auto-added {missing_base} (required base features).")
+            # ret_1d must be first — rv_hist_5d, rv_hist_20d and many others depend on it
+            if "ret_1d" in selected:
+                selected.remove("ret_1d")
+                selected.insert(0, "ret_1d")
             steps = [FEATURE_REGISTRY[name] for name in selected]
             try:
                 enriched_df = raw_df.copy()
@@ -148,6 +161,7 @@ def render() -> None:
                 st.session_state[SS_ENRICHED_DF] = enriched_df
                 st.session_state[SS_SELECTED_FEATURES] = selected
                 st.success(f"Built {len(feature_names)} features.")
+                st.rerun()
             except Exception as exc:
                 st.error(f"Feature build failed: {exc}")
                 return
@@ -217,18 +231,19 @@ def render() -> None:
         if enriched_df is None:
             st.warning("Build features first.")
         else:
-            clear_downstream("data_feature")
+            clear_downstream("feature_eng")
             # Ensure ret_1d exists (required by add_target_and_label)
             if "ret_1d" not in enriched_df.columns and "ret_1d" in FEATURE_REGISTRY:
                 enriched_df = FEATURE_REGISTRY["ret_1d"].fn(enriched_df)
                 st.session_state[SS_ENRICHED_DF] = enriched_df
             try:
-                X, y, meta_df = _build_dataset_cached(
+                X, y, meta_df, full_data = _build_dataset_cached(
                     enriched_df, horizon, label_method, selected
                 )
                 st.session_state[SS_X] = X
                 st.session_state[SS_Y] = y
                 st.session_state[SS_META_DF] = meta_df
+                st.session_state["_full_data"] = full_data
                 st.session_state[SS_HORIZON] = horizon
                 st.session_state[SS_LABEL_METHOD] = label_method
                 st.session_state[SS_TARGET_COL] = f"rv_fwd_{horizon}d"
@@ -236,6 +251,7 @@ def render() -> None:
                     f"Dataset ready: X={X.shape}, y={y.shape}, "
                     f"class balance: {y.value_counts().to_dict()}"
                 )
+                st.rerun()
             except Exception as exc:
                 st.error(f"Dataset build failed: {exc}")
 
@@ -268,14 +284,14 @@ def render() -> None:
                 auto_method = st.selectbox(
                     "Method",
                     ["lasso", "tree_topk", "ttest"],
-                    index=0,
+                    index=1,
                     key="auto_method",
                 )
 
             if st.button("Auto-Select Features", type="primary"):
                 from project.src.features.selection import select_features_on_fold
 
-                with st.spinner("Running LASSO feature selection..."):
+                with st.spinner("Running feature selection..."):
                     full_df, _ = apply_features(
                         raw_df.copy(), steps=DEFAULT_FEATURE_STEPS
                     )
@@ -304,14 +320,14 @@ def render() -> None:
                     )
                     new_selected = fs_result.selected_features
 
-                    X_clean, y_clean, meta_clean = _build_dataset_cached(
+                    X_clean, y_clean, meta_clean, _ = _build_dataset_cached(
                         full_df,
                         st.session_state.get(SS_HORIZON, 5),
                         st.session_state.get(SS_LABEL_METHOD, "expanding"),
                         new_selected,
                     )
 
-                    clear_downstream("data_feature")
+                    clear_downstream("feature_eng")
                     st.session_state[SS_SELECTED_FEATURES] = new_selected
                     st.session_state[SS_X] = X_clean
                     st.session_state[SS_Y] = y_clean
@@ -358,4 +374,5 @@ def _build_dataset_cached(
     X = data[feature_names].copy()
     y = data["y"].copy()
     meta_df = data[meta_cols].copy()
-    return X, y, meta_df
+    full_data = data.copy()
+    return X, y, meta_df, full_data
