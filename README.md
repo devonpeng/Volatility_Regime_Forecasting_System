@@ -159,9 +159,9 @@ uv run python train.py \
   --end 2025-12-31 \
   --models logistic xgb lgbm \
   --n-trials 30 \
+  --early-stop 5 \          # trial-level early stopping patience (consecutive non-improving folds before prune)
   --feature-selection lasso \
-  --top-k-features 12 \ 
-  ... // see src/main.py
+  --top-k-features 12
 ```
 
 If `yfinance` fails, the pipeline automatically falls back to synthetic data.
@@ -184,9 +184,9 @@ Model ranking:
 Run dir     : cache/runs/<run-id>
 Plots dir   : cache/runs/<run-id>/plots
 ```
-|Hyperparamater Trace Log | Evaluation Set ROC Curve |
+|Model Performance Evaluation | Prediction Review |
 |--|--|
-|![](./example_runs/plots/feature_correlation.png)|![](./example_runs/plots/predictions.png) |
+|![](./example_runs/plots/roc_curve.png)|![](./example_runs/plots/predictions.png) |
 |![](./example_runs/plots/model_comparison.png)|![](./example_runs/plots/price_and_rv.png) |
 
 ### Evaluate a Saved Run
@@ -851,8 +851,8 @@ Example CLI usage:
 
 ```bash
 uv run python train.py \
-  --feature-selection tree_topk \
-  --top-k-features 5
+  --feature-selection lasso \
+  --top-k-features 12
 ```
 
 Feature selection helps:
@@ -862,7 +862,11 @@ Feature selection helps:
 - Improve interpretability
 - Lower overfitting risk
 
-![](./example_runs/plots/feature_selection.png)
+| Method |
+|:-:|
+| ![](./example_runs/plots/feature_selection.png)| 
+| ![](./example_runs/plots/feature_correlation.png) |
+
 ---
 
 ## 12. Model Training
@@ -879,6 +883,20 @@ Each model is tuned with Optuna using time-series cross-validation.
 
 The default optimization objective is AUC.
 
+### Optuna Pruning & Trial-Level Early Stopping
+
+The pipeline uses **Optuna's HyperbandPruner** combined with a custom **patience pruner** (`_PatiencePruner`). Together they provide two layers of early termination to save compute:
+
+1. **Per-fold pruning (HyperbandPruner)** — after each fold completes inside a trial, the per-fold AUC is reported via `trial.report()` and checked against `should_prune()`. Trials whose intermediate scores fall below the resource-adapted threshold are aborted immediately. This enables successive halving across the CV folds within a single trial.
+
+2. **Per-trial patience stopping (`--early-stop N`)** — a custom `_PatiencePruner` monitors the sequence of intermediate values across all completed folds. If the best score seen so far has not been improved upon for `N` consecutive folds (default 5), the trial is pruned. This prevents wasting computation on trials that consistently underperform relative to the running optimum.
+
+Both mechanisms are controlled through the CLI parameter `--early-stop N`:
+
+| Parameter | Description |
+|---|---|
+| `--early-stop` | Number of consecutive folds without improvement before terminating a trial (default: 5). Set to 0 or 1 for aggressive pruning; higher values allow more exploration at the cost of runtime. |
+
 ### Example
 
 ```bash
@@ -887,13 +905,14 @@ uv run python train.py \
   --start 2018-01-01 \
   --end 2024-12-31 \
   --models logistic xgb lgbm \
-  --n-trials 30
+  --n-trials 30 \
+  --early-stop 5
 ```
 
 During training, the pipeline:
 
 1. Builds cross-validation splits
-2. Runs Optuna trials for each model
+2. Runs Optuna trials for each model with pruning
 3. Evaluates each trial using out-of-fold validation
 4. Selects the best model
 5. Fits the best model on the available training data
@@ -933,6 +952,8 @@ uv run python train.py \
 ```
 
 The gap helps reduce look-ahead leakage, especially because the target uses forward realized volatility.
+
+> **Note:** When `n_splits > 10`, the pipeline emits a `UserWarning` indicating that training time will increase significantly. Consider reducing to 5–10 splits unless you have sufficient compute budget.
 ![](./example_runs/plots/cv_splits.png)
 
 ---
@@ -1153,10 +1174,16 @@ If no LLM API key is available, the system falls back to a rule-based summary.
 This makes the evaluation output more interpretable and suitable for presentation.
 
 ```json
+// LLM SHAP summary
 {
     "status": "approved",
     "final_brief": "`[DR]` In this model, downside_rv has a SHAP value of 0.4004274642420753, vol_of_vol has a value of 0.26804987908225236, and ewma_rv has a value of -0.20919584346879797.`[FI]` These metrics indicate a contracting market regime where downside risk and volatility of volatility are the primary forces driving the consolidation.",
     "issues": [],
+}
+
+// Fallback SHAP Summary
+{
+    "final_brief": "[DR] kalman_price_medium has SHAP contribution 0.9118 for predicted class contracting. [FI] The upward pressure from kalman_price_medium appears to be the dominant driver in the current volatility regime transition."
 }
 ```
 ---

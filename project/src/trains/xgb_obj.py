@@ -34,18 +34,35 @@ def objective_xgb_classifier(
     auc_scores = []
     scaler = RobustScaler()
 
-    for _, (train_idx, val_idx) in enumerate(cv.split(X)):
+    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X)):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y_clf[train_idx], y_clf[val_idx]
 
         X_train_scaled = scaler.fit_transform(X_train)
         X_val_scaled = scaler.transform(X_val)
 
+        callbacks = [xgb.callback.EarlyStopping(
+            rounds=50,
+            checkpoint=True,
+            save_best=True,
+        )]
         model = xgb.XGBClassifier(**xgb_params)
-        model.fit(X_train_scaled, y_train, verbose=False)
+        model.fit(
+            X_train_scaled, y_train,
+            eval_set=[(X_val_scaled, y_val)],
+            callbacks=callbacks,
+            verbose=False,
+        )
 
         y_pred_proba = model.predict_proba(X_val_scaled)[:, 1]
-        auc_scores.append(roc_auc_score(y_val, y_pred_proba))
+        fold_auc = roc_auc_score(y_val, y_pred_proba)
+        if not np.isfinite(fold_auc):
+            continue
+
+        auc_scores.append(float(fold_auc))
+        trial.report(fold_auc, step=fold_idx)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
 
     if not auc_scores:
         return 0.0

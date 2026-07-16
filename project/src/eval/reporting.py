@@ -31,7 +31,7 @@ from project.src.metrics import (
 # Mapping: user-facing name → (function, arg_key_in_df_or_config, fallback_note)
 _BASELINE_SPECS = {
     "prior": ("prior_probability_baseline", None, None),
-    "rv_persist": ("rv_hist_persistence_baseline", "rv_fwd_5d", "rv_fwd_5d_state_persistence skipped: rv_fwd_5d column not found in OOF evaluation data."),
+    "rv_persist": ("rv_hist_persistence_baseline", "rv_hist_5d", "rv_hist_5d_state_persistence skipped: rv_hist_5d column not found in OOF evaluation data."),
     "garch": ("garch_calibrated_baseline_oof", "garch_vol_1d", "garch_vol_1d_logistic_calibration skipped: garch_vol_1d / CV artifacts not found in run data."),
 }
 
