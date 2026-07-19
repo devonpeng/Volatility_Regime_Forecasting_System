@@ -226,3 +226,9 @@ project/cache
 .vscode
 .codex
 .agents
+
+
+# idea 
+.idea
+# Ignore all MacOS system files and directories
+.DS_Store
