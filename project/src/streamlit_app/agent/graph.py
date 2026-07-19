@@ -7,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
+from project.src.streamlit_app.agent.streamlit_ctx import wrap_tools_with_streamlit_ctx
 from project.src.streamlit_app.agent.tools_clarify import ask_user
 from project.src.streamlit_app.agent.tools_read import READ_TOOLS
 from project.src.streamlit_app.agent.tools_write import WRITE_TOOLS
@@ -21,11 +22,13 @@ Stations:
 5. Comparison — Quick Browse grid + Custom Experiment (parquet workspaces only)
 
 Rules:
-- Prefer read tools (get_page_context, ls_features, get_feature, list_*) before proposing writes.
-- Use ls_features to browse feature names + short descriptions; use get_feature for formula/source.
+- Prefer get_current_page_snapshot to see what is on the student's current Station (config, data shapes, metrics, reports, plots).
+- Also use ls_features / get_feature / list_* as needed; get_page_context is a thinner global bag.
+- For Station 3, trust live cv/selected_models/n_trials/train_ratio and model_results; use content.checkpointed.* only when live model_results is empty (e.g. after reload).
 - Use ask_user when symbol, horizon, dates, features, or model settings are underspecified.
 - Write tools ONLY propose changes (propose_set_*). Never claim a setting already changed.
 - Tell the student they must click Apply on the proposed action in the chat for writes to take effect.
+- Apply syncs UI widgets on the next run; Station 5 does not invalidate Station 2–4 training results.
 - Be concise and pedagogical (under ~200 words for normal replies).
 - Teaching symbols: SPY, QQQ. Horizons: 5, 10.
 """
@@ -43,7 +46,7 @@ def get_tutor_agent(*, api_key: str, model_name: str):
             google_api_key=api_key,
             temperature=0.3,
         )
-        tools = [*READ_TOOLS, *WRITE_TOOLS, ask_user]
+        tools = wrap_tools_with_streamlit_ctx([*READ_TOOLS, *WRITE_TOOLS, ask_user])
         _agents[cache_key] = create_react_agent(
             llm,
             tools,

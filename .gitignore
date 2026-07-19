@@ -232,3 +232,5 @@ project/cache
 .idea
 # Ignore all MacOS system files and directories
 .DS_Store
+
+project/data

@@ -50,8 +50,10 @@ from project.src.streamlit_app.session_manager import (
     has_features_built,
     has_train_test_split,
 )
-from project.src.streamlit_app.workspace import checkpoint_current_workspace
-
+from project.src.streamlit_app.workspace import (
+    checkpoint_current_workspace,
+    ensure_pipeline_rehydrated,
+)
 
 PAGE_NAME = "model_design"
 
@@ -67,6 +69,34 @@ def _reset_training_state() -> None:
     st.session_state[SS_TRAIN_TRIAL_I] = 0
 
 
+def _sync_cv_widgets_to_session(
+    n_splits: int,
+    train_window: int,
+    test_size: int,
+    gap_size: int,
+) -> None:
+    """Keep SS_* CV params aligned with live widgets; drop stale CV objects."""
+    n_splits = int(n_splits)
+    train_window = int(train_window)
+    test_size = int(test_size)
+    gap_size = int(gap_size)
+    st.session_state[SS_CV_N_SPLITS] = n_splits
+    st.session_state[SS_CV_TRAIN_WINDOW] = train_window
+    st.session_state[SS_CV_TEST_SIZE] = test_size
+    st.session_state[SS_CV_GAP] = gap_size
+
+    cv = st.session_state.get(SS_CV)
+    if cv is None:
+        return
+    if (
+        int(getattr(cv, "n_splits", -1)) != n_splits
+        or int(getattr(cv, "train_window_size", -1)) != train_window
+        or int(getattr(cv, "test_size", -1)) != test_size
+        or int(getattr(cv, "gap_size", -1)) != gap_size
+    ):
+        st.session_state[SS_CV] = None
+
+
 def _finalize_training(results: list) -> None:
     if results:
         best = max(results, key=lambda r: r.best_auc)
@@ -75,6 +105,7 @@ def _finalize_training(results: list) -> None:
         st.session_state[SS_BEST_PARAMS] = best.best_params
         st.session_state[SS_FEATURE_SELECTION] = None
         st.session_state[SS_TOP_K] = 5
+        st.session_state.pop("_model_results_restored", None)
         checkpoint_current_workspace("model training")
     _reset_training_state()
 
@@ -171,6 +202,7 @@ def _tick_training() -> None:
 
 def render() -> None:
     st.header("🧠 Station 3: Model Design")
+    ensure_pipeline_rehydrated()
 
     if not has_features_built():
         st.warning("Complete Station 2 (Feature Engineering) first to build X and y.")
@@ -269,29 +301,34 @@ def render() -> None:
             key="md_cv_gap",
         )
 
+    # Keep logical SS_* keys in sync with what the student currently sees.
+    _sync_cv_widgets_to_session(n_splits, train_window, test_size, gap_size)
+
     if st.button("Create CV Object", type="primary"):
         if X_train is None:
             st.warning("Split data first.")
         else:
             try:
                 cv = TimeSeriesSplitWithPurge(
-                    n_splits=n_splits,
-                    train_window_size=train_window,
-                    test_size=test_size,
-                    gap_size=gap_size,
+                    n_splits=int(n_splits),
+                    train_window_size=int(train_window),
+                    test_size=int(test_size),
+                    gap_size=int(gap_size),
                 )
                 list(cv.split(X_train))
                 st.session_state[SS_CV] = cv
-                st.session_state[SS_CV_N_SPLITS] = n_splits
-                st.session_state[SS_CV_TRAIN_WINDOW] = train_window
-                st.session_state[SS_CV_TEST_SIZE] = test_size
-                st.session_state[SS_CV_GAP] = gap_size
+                st.session_state[SS_CV_N_SPLITS] = int(n_splits)
+                st.session_state[SS_CV_TRAIN_WINDOW] = int(train_window)
+                st.session_state[SS_CV_TEST_SIZE] = int(test_size)
+                st.session_state[SS_CV_GAP] = int(gap_size)
                 st.success("CV object created and validated.")
                 st.rerun()
             except Exception as exc:
                 st.error(f"CV creation failed: {exc}")
 
     cv = st.session_state.get(SS_CV)
+    if cv is None and X_train is not None:
+        st.info("CV params updated — click **Create CV Object** to rebuild with the new settings.")
     if cv is not None and X_train is not None:
         st.subheader("CV Split Visualization")
         fig = fig_cv_splits(cv, X_train)

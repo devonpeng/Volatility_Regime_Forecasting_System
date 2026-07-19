@@ -60,7 +60,10 @@ from project.src.streamlit_app.session_manager import (
     SS_Y,
     has_model_results,
 )
-from project.src.streamlit_app.workspace import checkpoint_current_workspace
+from project.src.streamlit_app.workspace import (
+    checkpoint_current_workspace,
+    ensure_pipeline_rehydrated,
+)
 
 
 def _get_feature_importances(model, feature_names: list[str]) -> dict[str, float]:
@@ -110,6 +113,7 @@ def _build_rule_based_report(
 
 def render() -> None:
     st.header("📊 Station 4: Implementation — Evaluation & Report")
+    ensure_pipeline_rehydrated()
 
     if not has_model_results():
         st.warning("Complete Station 3 (Model Design) first.")
@@ -133,15 +137,23 @@ def render() -> None:
         (r for r in model_results if r.name == best_model_name), None
     )
 
+    if st.session_state.get("_model_results_restored"):
+        st.info(
+            "Model results restored from workspace. "
+            "Optuna trial history is unavailable until you retrain."
+        )
+
     # ── 4a. Model Comparison ───────────────────────────────────────────
     st.subheader("4a. Model Comparison")
     fig = fig_model_comparison(model_results)
     st.plotly_chart(fig, use_container_width=True)
 
     if best_result is not None:
-        with st.expander("Optuna Optimization History"):
-            fig = fig_optuna_history(best_result.study)
-            st.plotly_chart(fig, use_container_width=True)
+        n_trials = len(getattr(best_result.study, "trials", []) or [])
+        if n_trials > 0:
+            with st.expander("Optuna Optimization History"):
+                fig = fig_optuna_history(best_result.study)
+                st.plotly_chart(fig, use_container_width=True)
 
     # ── 4b. Out-of-Fold Evaluation ────────────────────────────────────
     st.subheader("4b. Out-of-Fold Evaluation")

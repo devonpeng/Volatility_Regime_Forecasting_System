@@ -13,9 +13,9 @@ def needs_welcome() -> bool:
 
 
 def render_welcome() -> None:
-    """Deprecated: use left-sidebar Global Settings + Load Teaching Pack."""
+    """Deprecated: use Station 1 Load Teaching Pack."""
     st.info(
-        "Use **Global Settings** in the left sidebar to pick symbol, horizon, "
-        "and dates, then click **Load Teaching Pack**. "
-        "Or open Station 1 and use **Load Live Data** for the escape hatch."
+        "In **Station 1**, set dates and click **Load Teaching Pack** "
+        "(Symbol / Horizon are in the left **Global Settings** sidebar). "
+        "Or use **Load Live Data** for the escape hatch."
     )

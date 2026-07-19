@@ -1,4 +1,0 @@
-# Large teaching artifacts — generate via scripts/precompute_*.py
-precomputed/*.parquet
-precomputed/manifest.json
-workspaces.db

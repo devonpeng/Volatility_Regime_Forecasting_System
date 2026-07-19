@@ -14,6 +14,7 @@ from project.src.features.core import (
     apply_feature,
     apply_features,
 )
+from project.src.streamlit_app.global_settings import render_teaching_pack_loader
 from project.src.streamlit_app.precomputed import (
     extract_xy_from_wide,
     feature_column_names,
@@ -31,12 +32,52 @@ from project.src.streamlit_app.session_manager import (
     SS_SELECTED_FEATURES,
     SS_SYMBOL,
     SS_TARGET_COL,
+    SS_WORKSPACE_CONFIG,
     SS_X,
     SS_Y,
     clear_downstream,
     is_parquet_workspace,
 )
-from project.src.streamlit_app.workspace import checkpoint_current_workspace
+from project.src.streamlit_app.workspace import (
+    checkpoint_current_workspace,
+    ensure_pipeline_rehydrated,
+    request_feature_widget_sync,
+)
+
+# Survives st.rerun() so Confirm Selection can show a success banner after refresh.
+_SS_FENG_FLASH = "_feng_flash_success"
+
+
+def _flash_feng_success(msg: str, *, slot: str = "confirm") -> None:
+    """Toast immediately and keep a banner for the next run at ``slot``."""
+    st.session_state[_SS_FENG_FLASH] = {"msg": msg, "slot": slot}
+    st.toast(msg)
+
+
+def _consume_feng_flash(slot: str = "confirm") -> None:
+    data = st.session_state.get(_SS_FENG_FLASH)
+    if not isinstance(data, dict) or data.get("slot") != slot:
+        return
+    st.session_state.pop(_SS_FENG_FLASH, None)
+    st.success(data["msg"])
+
+
+def _sync_workspace_config_selection(
+    selected: list[str],
+    label_method: str | None,
+) -> None:
+    """Mirror current Station 2 drafts into in-memory workspace config (no DB write)."""
+    cfg = dict(st.session_state.get(SS_WORKSPACE_CONFIG) or {})
+    changed = False
+    sel = list(selected)
+    if cfg.get("selected_features") != sel:
+        cfg["selected_features"] = sel
+        changed = True
+    if label_method is not None and cfg.get("label_method") != label_method:
+        cfg["label_method"] = label_method
+        changed = True
+    if changed:
+        st.session_state[SS_WORKSPACE_CONFIG] = cfg
 
 
 @st.cache_data(show_spinner="Downloading market data...")
@@ -53,6 +94,9 @@ def _get_feature_source(name: str) -> str:
 def render_etl() -> None:
     st.header("Station 1: ETL — Data Loading")
 
+    render_teaching_pack_loader()
+    st.markdown("---")
+
     raw_df = st.session_state.get(SS_RAW_DF)
     data_source = st.session_state.get(SS_DATA_SOURCE, "parquet")
 
@@ -64,8 +108,8 @@ def render_etl() -> None:
             f"{len(raw_df):,} rows (read-only preview)."
         )
         st.info(
-            "Change symbol / horizon / dates in the left **Global Settings** sidebar "
-            "and click **Load Teaching Pack**. "
+            "Change **Symbol / Horizon** in the left sidebar and **dates** above, "
+            "then click **Load Teaching Pack**. "
             "Features and dual labels are already in the Parquet — use Station 2 to select features. "
             "Comparison (Station 5) is available on this path."
         )
@@ -77,14 +121,15 @@ def render_etl() -> None:
         )
     elif raw_df is None:
         st.info(
-            "Load a teaching pack from **Global Settings** (left sidebar), "
+            "Pick dates above and click **Load Teaching Pack** "
+            "(Symbol / Horizon come from the left sidebar), "
             "or use **Load Live Data** below."
         )
 
     with st.expander("Advanced: Live download / synthetic", expanded=raw_df is None):
         st.warning(
             "Live mode rebuilds features in-session and **disables Station 5 (Comparison)**. "
-            "Prefer Global Settings → Load Teaching Pack for coursework."
+            "Prefer Station 1 → Load Teaching Pack for coursework."
         )
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -166,6 +211,7 @@ def render_etl() -> None:
 
 def render_feng() -> None:
     st.header("Station 2: Feature Engineering")
+    ensure_pipeline_rehydrated()
 
     raw_df = st.session_state.get(SS_RAW_DF)
     if raw_df is None:
@@ -203,27 +249,35 @@ def _render_feng_parquet(raw_df: pd.DataFrame) -> None:
     RECOMMENDED = [f for f in RECOMMENDED if f in all_names]
 
     def _on_preset_change() -> None:
-        st.session_state["_fs_version"] = st.session_state.get("_fs_version", 0) + 1
-        st.session_state[SS_SELECTED_FEATURES] = []
+        choice = st.session_state.get("feature_preset", "All Features")
+        defaults = all_names if choice == "All Features" else RECOMMENDED
+        v = int(st.session_state.get("_fs_version", 0)) + 1
+        st.session_state["_fs_version"] = v
+        st.session_state[SS_SELECTED_FEATURES] = list(defaults)
+        st.session_state[f"feat_sel_{v}"] = list(defaults)
 
     preset = st.radio(
         "Feature preset",
         options=["All Features", "LASSO Recommended"],
         horizontal=True,
-        index=0,
         key="feature_preset",
         on_change=_on_preset_change,
     )
     default_selection = all_names if preset == "All Features" else RECOMMENDED
     if "_fs_version" not in st.session_state:
         st.session_state["_fs_version"] = 0
+    feat_key = f"feat_sel_{st.session_state['_fs_version']}"
+    if feat_key not in st.session_state:
+        stored = list(st.session_state.get(SS_SELECTED_FEATURES) or [])
+        st.session_state[feat_key] = stored if stored else list(default_selection)
     selected = st.multiselect(
         "Select features",
         options=all_names,
-        default=st.session_state.get(SS_SELECTED_FEATURES) or default_selection,
-        key=f"feat_sel_{st.session_state['_fs_version']}",
+        key=feat_key,
     )
     st.session_state[SS_SELECTED_FEATURES] = selected
+    # Keep in-memory workspace config aligned with UI (DB write happens on Confirm).
+    _sync_workspace_config_selection(selected, st.session_state.get(SS_LABEL_METHOD))
 
     with st.expander("Feature Computation Details", expanded=False):
         for name in selected:
@@ -240,12 +294,18 @@ def _render_feng_parquet(raw_df: pd.DataFrame) -> None:
     st.subheader("Label Configuration")
     horizon = int(st.session_state.get(SS_HORIZON, 5))
     st.write(f"Horizon (from Global Settings): **{horizon}-day**")
+    if "feng_label_method" not in st.session_state:
+        st.session_state["feng_label_method"] = st.session_state.get(
+            SS_LABEL_METHOD, "expanding"
+        )
     label_method = st.radio(
         "Label method",
         ["expanding", "median"],
-        index=0 if st.session_state.get(SS_LABEL_METHOD, "expanding") == "expanding" else 1,
+        key="feng_label_method",
         help="Uses precomputed y_expanding / y_median columns.",
     )
+    st.session_state[SS_LABEL_METHOD] = label_method
+    _sync_workspace_config_selection(selected, label_method)
 
     if st.button("Confirm Selection (build X, y)", type="primary"):
         if not selected:
@@ -259,11 +319,12 @@ def _render_feng_parquet(raw_df: pd.DataFrame) -> None:
                     label_method,
                     checkpoint_reason="station2 selection",
                 )
-                st.success(msg)
+                _flash_feng_success(msg)
                 st.rerun()
             except Exception as exc:
                 st.error(f"Dataset build failed: {exc}")
 
+    _consume_feng_flash()
     _show_dataset_summary()
     _auto_select_block(raw_df, all_names, preset == "All Features")
 
@@ -289,14 +350,19 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
     ]
 
     def _on_preset_change() -> None:
-        st.session_state["_fs_version"] = st.session_state.get("_fs_version", 0) + 1
-        st.session_state[SS_SELECTED_FEATURES] = []
+        choice = st.session_state.get("feature_preset_live", "All Features (49)")
+        defaults = (
+            all_names if str(choice).startswith("All") else RECOMMENDED_FEATURES
+        )
+        v = int(st.session_state.get("_fs_version", 0)) + 1
+        st.session_state["_fs_version"] = v
+        st.session_state[SS_SELECTED_FEATURES] = list(defaults)
+        st.session_state[f"feat_sel_live_{v}"] = list(defaults)
 
     preset = st.radio(
         "Feature preset",
         options=["All Features (49)", "LASSO Recommended"],
         horizontal=True,
-        index=0,
         key="feature_preset_live",
         on_change=_on_preset_change,
     )
@@ -305,13 +371,17 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
     )
     if "_fs_version" not in st.session_state:
         st.session_state["_fs_version"] = 0
+    feat_key = f"feat_sel_live_{st.session_state['_fs_version']}"
+    if feat_key not in st.session_state:
+        stored = list(st.session_state.get(SS_SELECTED_FEATURES) or [])
+        st.session_state[feat_key] = stored if stored else list(default_selection)
     selected = st.multiselect(
         "Select features",
         options=all_names,
-        default=st.session_state.get(SS_SELECTED_FEATURES) or default_selection,
-        key=f"feat_sel_live_{st.session_state['_fs_version']}",
+        key=feat_key,
     )
     st.session_state[SS_SELECTED_FEATURES] = selected
+    _sync_workspace_config_selection(selected, st.session_state.get(SS_LABEL_METHOD))
 
     enriched_df = st.session_state.get(SS_ENRICHED_DF)
 
@@ -342,11 +412,15 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
                     progress_bar.progress((i + 1) / len(steps))
                 st.session_state[SS_ENRICHED_DF] = enriched_df
                 st.session_state[SS_SELECTED_FEATURES] = selected
-                st.success(f"Built {len(selected)} features.")
+                _flash_feng_success(
+                    f"Built {len(selected)} features.", slot="build_features"
+                )
                 st.rerun()
             except Exception as exc:
                 st.error(f"Feature build failed: {exc}")
                 return
+
+    _consume_feng_flash("build_features")
 
     if enriched_df is not None:
         st.subheader("Enriched DataFrame Preview")
@@ -357,7 +431,17 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
     with col1:
         horizon = st.slider("Horizon (days)", 1, 20, st.session_state.get(SS_HORIZON, 5))
     with col2:
-        label_method = st.radio("Label method", ["expanding", "median"], index=0)
+        if "feng_label_method_live" not in st.session_state:
+            st.session_state["feng_label_method_live"] = st.session_state.get(
+                SS_LABEL_METHOD, "expanding"
+            )
+        label_method = st.radio(
+            "Label method",
+            ["expanding", "median"],
+            key="feng_label_method_live",
+        )
+        st.session_state[SS_LABEL_METHOD] = label_method
+        _sync_workspace_config_selection(selected, label_method)
 
     if st.button("Build Dataset (X, y)", type="primary"):
         if enriched_df is None:
@@ -379,7 +463,7 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
                 st.session_state[SS_LABEL_METHOD] = label_method
                 st.session_state[SS_TARGET_COL] = f"rv_fwd_{horizon}d"
                 checkpoint_current_workspace("station2 live dataset")
-                st.success(
+                _flash_feng_success(
                     f"Dataset ready: X={X.shape}, y={y.shape}, "
                     f"class balance: {y.value_counts().to_dict()}"
                 )
@@ -387,6 +471,7 @@ def _render_feng_live(raw_df: pd.DataFrame) -> None:
             except Exception as exc:
                 st.error(f"Dataset build failed: {exc}")
 
+    _consume_feng_flash()
     _show_dataset_summary()
 
 
@@ -451,16 +536,17 @@ def _auto_select_block(raw_df: pd.DataFrame, all_names: list[str], enabled: bool
                 st.session_state[SS_META_DF] = meta_clean
                 st.session_state["_full_data"] = full_data
                 st.session_state[SS_TARGET_COL] = f"rv_fwd_{horizon}d"
-                st.session_state["_fs_version"] = st.session_state.get("_fs_version", 0) + 1
+                request_feature_widget_sync()
                 checkpoint_current_workspace("auto feature select")
-                st.success(f"Selected {len(new_selected)} features. X={X_clean.shape}")
-                st.dataframe(
-                    fs_result.scores.to_frame("score").sort_values("score", ascending=False),
-                    use_container_width=True,
+                _flash_feng_success(
+                    f"Selected {len(new_selected)} features. X={X_clean.shape}",
+                    slot="auto_select",
                 )
                 st.rerun()
             except Exception as exc:
                 st.error(f"Auto-select failed: {exc}")
+
+    _consume_feng_flash("auto_select")
 
 
 @st.cache_data(show_spinner="Building dataset...")

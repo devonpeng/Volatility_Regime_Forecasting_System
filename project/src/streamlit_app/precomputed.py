@@ -9,7 +9,7 @@ import pandas as pd
 from project.src.features.core import DEFAULT_FEATURE_STEPS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PRECOMPUTED_DIR = PROJECT_ROOT / "data" / "precomputed"
+PRECOMPUTED_DIR = PROJECT_ROOT / "cache" / "precomputed"
 MANIFEST_PATH = PRECOMPUTED_DIR / "manifest.json"
 
 TEACHING_SYMBOLS = ("SPY", "QQQ")

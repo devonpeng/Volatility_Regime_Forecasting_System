@@ -17,6 +17,7 @@ from project.src.streamlit_app.precomputed import (
     parquet_available,
 )
 from project.src.streamlit_app.session_manager import (
+    SS_CV,
     SS_CV_GAP,
     SS_CV_N_SPLITS,
     SS_CV_TEST_SIZE,
@@ -39,7 +40,10 @@ from project.src.streamlit_app.session_manager import (
 from project.src.streamlit_app.workspace import (
     apply_parquet_slice_to_session,
     checkpoint_current_workspace,
+    request_comparison_widget_sync,
+    request_feature_widget_sync,
     request_global_setting_widget_sync,
+    request_model_widget_sync,
 )
 
 
@@ -133,7 +137,8 @@ def commit_features(
     st.session_state[SS_LABEL_METHOD] = label_method
     st.session_state[SS_TARGET_COL] = f"rv_fwd_{horizon}d"
     st.session_state[SS_SELECTED_FEATURES] = selected
-    st.session_state["_fs_version"] = st.session_state.get("_fs_version", 0) + 1
+    # Remount widgets on next run from logical keys (do not rely on mid-run widget writes).
+    request_feature_widget_sync()
     if checkpoint_reason:
         checkpoint_current_workspace(checkpoint_reason)
     return f"Features committed: {len(selected)} cols, X={X.shape}"
@@ -159,7 +164,6 @@ def _apply_model_config(payload: dict[str, Any]) -> str:
         st.session_state[SS_TRAIN_RATIO] = float(payload["train_ratio"])
     if "n_trials" in payload:
         st.session_state[SS_N_TRIALS] = int(payload["n_trials"])
-        st.session_state["md_n_trials"] = int(payload["n_trials"])
 
     models = payload.get("selected_models")
     if models is not None:
@@ -168,63 +172,48 @@ def _apply_model_config(payload: dict[str, Any]) -> str:
         if not selected:
             raise ValueError(f"selected_models must intersect {sorted(allowed)}")
         st.session_state[SS_SELECTED_MODELS] = selected
-        st.session_state["md_selected_models"] = selected
 
     # Invalidate CV object so student recreates with new params
-    if st.session_state.get("cv") is not None and any(
+    if st.session_state.get(SS_CV) is not None and any(
         k in payload
         for k in ("cv_n_splits", "cv_train_window", "cv_test_size", "cv_gap_size")
     ):
-        st.session_state["cv"] = None
+        st.session_state[SS_CV] = None
 
+    # Eagerly update already-mounted Station 3 widgets (flush also runs next rerun).
+    _widget_map = {
+        "cv_n_splits": ("md_cv_n_splits", int),
+        "cv_train_window": ("md_cv_train_window", int),
+        "cv_test_size": ("md_cv_test_size", int),
+        "cv_gap_size": ("md_cv_gap", int),
+        "train_ratio": ("md_train_ratio", float),
+        "n_trials": ("md_n_trials", int),
+    }
+    for payload_key, (widget_key, cast) in _widget_map.items():
+        if payload_key in payload:
+            st.session_state[widget_key] = cast(payload[payload_key])
+    if models is not None:
+        st.session_state["md_selected_models"] = list(
+            st.session_state.get(SS_SELECTED_MODELS) or []
+        )
+
+    request_model_widget_sync()
     checkpoint_current_workspace("ai apply model config")
     return "Station 3 model/CV settings updated (recreate CV if params changed)."
 
 
 def _apply_comparison_browse(payload: dict[str, Any]) -> str:
-    filters = dict(payload.get("filters") or {})
-    mapping = {
-        "symbol": "qb_sym",
-        "horizon": "qb_hrz",
-        "feature_selection": "qb_sel",
-        "model": "qb_model",
-        "date_range": "qb_dates",
-        "top_k": "qb_topk",
+    st.session_state["_pending_compare_browse"] = {
+        "filters": dict(payload.get("filters") or {}),
+        "selected_ids": payload.get("selected_ids"),
     }
-    for src, key in mapping.items():
-        if src in filters and filters[src] is not None:
-            st.session_state[key] = str(filters[src])
-
-    if "selected_ids" in payload and payload["selected_ids"] is not None:
-        st.session_state["qb_compare_ids"] = [str(x) for x in payload["selected_ids"]]
-
+    request_comparison_widget_sync()
     return "Comparison Quick Browse filters updated."
 
 
 def _apply_comparison_custom(payload: dict[str, Any]) -> str:
-    params = dict(payload.get("params") or payload)
-    key_map = {
-        "start": "ce_start",
-        "end": "ce_end",
-        "fs_method": "ce_fs",
-        "top_k": "ce_topk",
-        "nested": "ce_nested",
-        "models": "ce_models",
-        "n_trials": "ce_trials",
-        "early_stop": "ce_early",
-        "n_splits": "ce_ns",
-        "train_window": "ce_tw",
-        "test_size": "ce_ts",
-        "gap": "ce_gap",
+    st.session_state["_pending_compare_custom"] = {
+        "params": dict(payload.get("params") or payload),
     }
-    for src, key in key_map.items():
-        if src not in params or params[src] is None:
-            continue
-        val = params[src]
-        if src in ("start", "end"):
-            import pandas as pd
-
-            st.session_state[key] = pd.Timestamp(val).date()
-        else:
-            st.session_state[key] = val
+    request_comparison_widget_sync()
     return "Comparison Custom Experiment params staged."

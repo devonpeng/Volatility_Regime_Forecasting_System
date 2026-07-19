@@ -1,4 +1,7 @@
-"""Left-sidebar Global Settings: symbol / horizon / date range + Load Teaching Pack."""
+"""Left-sidebar Global Settings: symbol / horizon + Reset All.
+
+Date range + Load Teaching Pack live in Station 1 (see ``render_teaching_pack_loader``).
+"""
 from __future__ import annotations
 
 import datetime as dt
@@ -54,6 +57,36 @@ def load_teaching_pack(
         checkpoint_current_workspace(checkpoint_reason)
 
 
+def _as_ymd(val) -> str:
+    return pd.Timestamp(val).strftime("%Y-%m-%d")
+
+
+def _draft_differs_from_loaded() -> bool:
+    if not (
+        st.session_state.get(SS_WELCOME_DONE)
+        and st.session_state.get("raw_df") is not None
+    ):
+        return False
+    try:
+        if st.session_state.get(GS_SYMBOL) != st.session_state.get(SS_SYMBOL):
+            return True
+        if int(st.session_state.get(GS_HORIZON, 5)) != int(
+            st.session_state.get(SS_HORIZON, 5)
+        ):
+            return True
+        if _as_ymd(st.session_state.get(GS_START)) != str(
+            st.session_state.get(SS_DATE_START, "")
+        ):
+            return True
+        if _as_ymd(st.session_state.get(GS_END)) != str(
+            st.session_state.get(SS_DATE_END, "")
+        ):
+            return True
+    except Exception:
+        return True
+    return False
+
+
 def render_global_settings_sidebar() -> None:
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Global Settings**")
@@ -93,14 +126,54 @@ def render_global_settings_sidebar() -> None:
         horizontal=True,
     )
 
-    symbol = st.session_state[GS_SYMBOL]
-    horizon = int(st.session_state[GS_HORIZON])
+    applied_sym = st.session_state.get(SS_SYMBOL, "?")
+    applied_h = st.session_state.get(SS_HORIZON, "?")
+    applied_ds = st.session_state.get(SS_DATE_START, "?")
+    applied_de = st.session_state.get(SS_DATE_END, "?")
+    loaded = bool(st.session_state.get(SS_WELCOME_DONE)) and st.session_state.get("raw_df") is not None
+    if loaded:
+        st.sidebar.caption(
+            f"Loaded: {applied_sym} · {applied_h}d · {applied_ds} → {applied_de}"
+        )
+        if _draft_differs_from_loaded():
+            st.sidebar.warning(
+                "Settings changed — go to Station 1 and **Load Teaching Pack**."
+            )
+    else:
+        st.sidebar.caption(
+            "No teaching pack loaded yet. Set dates in Station 1 and Load Teaching Pack."
+        )
+
+    if st.sidebar.button("Reset All", key="gs_reset_all_btn"):
+        reset_pipeline_keep_globals()
+        checkpoint_current_workspace("reset all")
+        st.rerun()
+
+
+def render_teaching_pack_loader() -> None:
+    """Station 1: date range + Load Teaching Pack (uses sidebar Symbol/Horizon drafts)."""
+    missing = [
+        f"{s}_{h}d"
+        for s in TEACHING_SYMBOLS
+        for h in TEACHING_HORIZONS
+        if not parquet_available(s, h)
+    ]
+    if missing:
+        st.error(
+            "Missing packs: "
+            + ", ".join(missing)
+            + ". Run `uv run python scripts/precompute_data.py`."
+        )
+        return
+
+    symbol = st.session_state.get(GS_SYMBOL, TEACHING_SYMBOLS[0])
+    horizon = int(st.session_state.get(GS_HORIZON, TEACHING_HORIZONS[0]))
 
     try:
         probe = cached_load_precomputed(symbol, horizon)
         dmin, dmax = date_bounds(probe)
     except Exception as exc:
-        st.sidebar.error(str(exc))
+        st.error(str(exc))
         return
 
     default_start = max(pd.Timestamp(DEFAULT_PACK_START), dmin)
@@ -122,43 +195,38 @@ def render_global_settings_sidebar() -> None:
     st.session_state[GS_START] = _clamp(st.session_state.get(GS_START, default_start.date()))
     st.session_state[GS_END] = _clamp(st.session_state.get(GS_END, default_end.date()))
 
-    start = st.sidebar.date_input(
-        "Start date",
-        min_value=dmin.date(),
-        max_value=dmax.date(),
-        key=GS_START,
+    st.markdown(
+        f"**Teaching pack** · draft symbol/horizon from sidebar: "
+        f"`{symbol}` · `{horizon}-day`"
     )
-    end = st.sidebar.date_input(
-        "End date",
-        min_value=dmin.date(),
-        max_value=dmax.date(),
-        key=GS_END,
-    )
-
-    applied_sym = st.session_state.get(SS_SYMBOL, "?")
-    applied_h = st.session_state.get(SS_HORIZON, "?")
-    applied_ds = st.session_state.get(SS_DATE_START, "?")
-    applied_de = st.session_state.get(SS_DATE_END, "?")
-    loaded = bool(st.session_state.get(SS_WELCOME_DONE)) and st.session_state.get("raw_df") is not None
-    if loaded:
-        st.sidebar.caption(
-            f"Loaded: {applied_sym} · {applied_h}d · {applied_ds} → {applied_de}"
+    col_s, col_e, col_btn = st.columns([2, 2, 2])
+    with col_s:
+        start = st.date_input(
+            "Start date",
+            min_value=dmin.date(),
+            max_value=dmax.date(),
+            key=GS_START,
         )
-    else:
-        st.sidebar.caption("No teaching pack loaded yet.")
+    with col_e:
+        end = st.date_input(
+            "End date",
+            min_value=dmin.date(),
+            max_value=dmax.date(),
+            key=GS_END,
+        )
+    with col_btn:
+        st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+        load_clicked = st.button(
+            "Load Teaching Pack", type="primary", key="station1_load_pack_btn"
+        )
 
     if start > end:
-        st.sidebar.warning("Start must be on or before end.")
-    elif st.sidebar.button("Load Teaching Pack", type="primary", key="gs_load_btn"):
+        st.warning("Start must be on or before end.")
+    elif load_clicked:
         load_teaching_pack(
             symbol,
             horizon,
             start.strftime("%Y-%m-%d"),
             end.strftime("%Y-%m-%d"),
         )
-        st.rerun()
-
-    if st.sidebar.button("Reset All", key="gs_reset_all_btn"):
-        reset_pipeline_keep_globals()
-        checkpoint_current_workspace("reset all")
         st.rerun()

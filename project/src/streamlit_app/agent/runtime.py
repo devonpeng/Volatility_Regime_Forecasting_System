@@ -10,6 +10,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from project.src.streamlit_app.agent.graph import get_tutor_agent
+from project.src.streamlit_app.agent.streamlit_ctx import (
+    bind_script_run_ctx,
+    clear_script_run_ctx,
+)
 from project.src.streamlit_app.session_manager import (
     SS_AI_CLARIFY,
     SS_AI_THREAD_ID,
@@ -258,65 +262,69 @@ def stream_tutor(
 ) -> dict[str, Any]:
     """Stream a tutor turn; optionally invoke *on_step* for live UI updates."""
     st.session_state["_current_page"] = page_name
-    agent = get_tutor_agent(api_key=api_key, model_name=model_name)
-    thread_id = ensure_thread_id()
-    config = {"configurable": {"thread_id": thread_id}}
-
-    resuming = bool(st.session_state.get(SS_AI_CLARIFY))
-    if resuming:
-        payload: Any = Command(resume=user_text)
-        st.session_state[SS_AI_CLARIFY] = None
-    else:
-        prefix = f"[Current page: {page_name}] " if page_name else ""
-        payload = {"messages": [HumanMessage(content=prefix + user_text)]}
-
-    trace: list[dict[str, Any]] = []
-    final_state: dict[str, Any] = {}
-    seen = 0
-
+    bind_script_run_ctx()
     try:
-        for chunk in agent.stream(payload, config=config, stream_mode="values"):
-            if not isinstance(chunk, dict):
-                continue
-            final_state = chunk
-            messages = list(chunk.get("messages") or [])
-            seen = _emit_trace_steps(messages, seen=seen, on_step=on_step, trace=trace)
-    except Exception:
-        # Fallback to invoke if stream fails mid-flight after partial progress
-        # is undesirable — prefer a clean invoke when stream never started.
-        if not final_state:
-            result = agent.invoke(payload, config=config)
-            if not isinstance(result, dict):
-                result = {"messages": []}
-            messages = list(result.get("messages") or [])
-            trace = _trace_from_messages(messages)
-            if on_step:
-                for step in trace:
-                    on_step(step)
-            return _apply_invoke_result(result, trace=trace)
-        raise
+        agent = get_tutor_agent(api_key=api_key, model_name=model_name)
+        thread_id = ensure_thread_id()
+        config = {"configurable": {"thread_id": thread_id}}
 
-    # Interrupt payloads may only appear on get_state after stream ends
-    if "__interrupt__" not in final_state:
+        resuming = bool(st.session_state.get(SS_AI_CLARIFY))
+        if resuming:
+            payload: Any = Command(resume=user_text)
+            st.session_state[SS_AI_CLARIFY] = None
+        else:
+            prefix = f"[Current page: {page_name}] " if page_name else ""
+            payload = {"messages": [HumanMessage(content=prefix + user_text)]}
+
+        trace: list[dict[str, Any]] = []
+        final_state: dict[str, Any] = {}
+        seen = 0
+
         try:
-            snap = agent.get_state(config)
-            if snap is not None:
-                values = getattr(snap, "values", None) or {}
-                if isinstance(values, dict) and values.get("messages"):
-                    final_state = {**final_state, **values}
-                interrupts = []
-                for task in getattr(snap, "tasks", None) or []:
-                    for ig in getattr(task, "interrupts", None) or []:
-                        interrupts.append(ig)
-                if interrupts:
-                    final_state = {**final_state, "__interrupt__": interrupts}
+            for chunk in agent.stream(payload, config=config, stream_mode="values"):
+                if not isinstance(chunk, dict):
+                    continue
+                final_state = chunk
+                messages = list(chunk.get("messages") or [])
+                seen = _emit_trace_steps(messages, seen=seen, on_step=on_step, trace=trace)
         except Exception:
-            pass
+            # Fallback to invoke if stream fails mid-flight after partial progress
+            # is undesirable — prefer a clean invoke when stream never started.
+            if not final_state:
+                result = agent.invoke(payload, config=config)
+                if not isinstance(result, dict):
+                    result = {"messages": []}
+                messages = list(result.get("messages") or [])
+                trace = _trace_from_messages(messages)
+                if on_step:
+                    for step in trace:
+                        on_step(step)
+                return _apply_invoke_result(result, trace=trace)
+            raise
 
-    if not trace and final_state.get("messages"):
-        trace = _trace_from_messages(list(final_state.get("messages") or []))
+        # Interrupt payloads may only appear on get_state after stream ends
+        if "__interrupt__" not in final_state:
+            try:
+                snap = agent.get_state(config)
+                if snap is not None:
+                    values = getattr(snap, "values", None) or {}
+                    if isinstance(values, dict) and values.get("messages"):
+                        final_state = {**final_state, **values}
+                    interrupts = []
+                    for task in getattr(snap, "tasks", None) or []:
+                        for ig in getattr(task, "interrupts", None) or []:
+                            interrupts.append(ig)
+                    if interrupts:
+                        final_state = {**final_state, "__interrupt__": interrupts}
+            except Exception:
+                pass
 
-    return _apply_invoke_result(final_state, trace=trace)
+        if not trace and final_state.get("messages"):
+            trace = _trace_from_messages(list(final_state.get("messages") or []))
+
+        return _apply_invoke_result(final_state, trace=trace)
+    finally:
+        clear_script_run_ctx()
 
 
 def invoke_tutor(

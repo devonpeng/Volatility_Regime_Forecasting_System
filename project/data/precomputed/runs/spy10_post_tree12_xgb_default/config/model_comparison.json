@@ -1,9 +1,0 @@
-{
-  "models": [
-    {
-      "name": "xgb",
-      "best_auc": 0.5,
-      "best_params": {}
-    }
-  ]
-}

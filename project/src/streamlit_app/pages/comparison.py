@@ -210,13 +210,13 @@ def render() -> None:
     if not is_parquet_workspace():
         st.warning(
             "Comparison requires a Parquet-backed teaching-pack workspace. "
-            "Use Global Settings → Load Teaching Pack (avoid the live escape hatch)."
+            "Use Station 1 → Load Teaching Pack (avoid the live escape hatch)."
         )
         return
 
     full_df = st.session_state.get(SS_FULL_DF)
     if full_df is None:
-        st.warning("Load a teaching pack via Global Settings (left sidebar) first.")
+        st.warning("Load a teaching pack in Station 1 first.")
         return
 
     view = _load_view_cfg()
@@ -320,7 +320,7 @@ def render() -> None:
 
         # Deep-dive: up to 3 experiments, each full stack
         st.subheader("Eval Deep-dive")
-        max_deep = 3
+        max_deep = 1
         auto_id = st.session_state.pop("_dd_auto_id", None)
         if auto_id and auto_id in options:
             prev = list(st.session_state.get("qb_deep_ids") or [])
@@ -380,169 +380,173 @@ def render() -> None:
             )
 
     # ── Custom Experiment ─────────────────────────────────────────────
-    st.subheader("Custom Experiment")
-    r1c1, r1c2 = st.columns(2)
-    r2c1, r2c2 = st.columns(2)
+    with st.expander("Custom Experiment", expanded=False):
+        r1c1, r1c2 = st.columns(2)
+        r2c1, r2c2 = st.columns(2)
 
-    with r1c1:
-        st.markdown("**Time range**")
-        preset_keys = list(presets.keys()) + ["custom"]
-        date_choice = st.radio(
-            "Preset",
-            options=preset_keys,
-            horizontal=True,
-            key="ce_date_preset",
-            label_visibility="collapsed",
-        )
-        dmin = pd.to_datetime(full_df["Date"]).min().date()
-        dmax = pd.to_datetime(full_df["Date"]).max().date()
-        if date_choice == "custom":
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                c_start = st.date_input(
-                    "Start",
-                    value=max(dmin, pd.Timestamp("2010-01-01").date()),
-                    min_value=dmin,
-                    max_value=dmax,
-                    key="ce_start",
-                )
-            with dc2:
-                c_end = st.date_input(
-                    "End",
-                    value=min(dmax, pd.Timestamp("2024-12-31").date()),
-                    min_value=dmin,
-                    max_value=dmax,
-                    key="ce_end",
-                )
-            date_range_key = "custom"
-            start_s = c_start.strftime("%Y-%m-%d")
-            end_s = c_end.strftime("%Y-%m-%d")
-        else:
-            start_s = presets[date_choice]["start"]
-            end_s = presets[date_choice]["end"]
-            date_range_key = date_choice
-            st.caption(f"`{date_choice}`: {start_s} → {end_s}")
-
-    with r1c2:
-        st.markdown("**Feature selection**")
-        fs_method = st.selectbox(
-            "Method",
-            ["none", "lasso", "tree_topk", "ttest"],
-            index=1,
-            key="ce_fs",
-        )
-        top_k = st.number_input("Top-K", 3, 40, 12, key="ce_topk")
-        nested = st.checkbox("Nested per-fold", value=False, key="ce_nested")
-
-    with r2c1:
-        st.markdown("**Model & tuning**")
-        models = st.multiselect(
-            "Models",
-            ["lgbm", "xgb", "logistic"],
-            default=["lgbm"],
-            key="ce_models",
-        )
-        n_trials = st.number_input("n_trials", 5, 100, 20, key="ce_trials")
-        early_stop = st.number_input("early_stop", 1, 20, 5, key="ce_early")
-
-    with r2c2:
-        st.markdown("**Cross-validation**")
-        n_splits = st.number_input("n_splits", 3, 20, 12, key="ce_ns")
-        train_window = st.number_input("train_window", 63, 1008, 252, key="ce_tw")
-        test_size = st.number_input("test_size", 5, 126, 21, key="ce_ts")
-        gap = st.number_input("gap", 0, 63, 5, key="ce_gap")
-
-    if st.button("Run Custom Comparison", type="primary"):
-        if not models:
-            st.warning("Select at least one model.")
-        elif start_s > end_s:
-            st.warning("Invalid date range.")
-        else:
-            with st.spinner("Running RVPipeline..."):
-                try:
-                    symbol = st.session_state.get(SS_SYMBOL, "SPY")
-                    horizon = int(st.session_state.get(SS_HORIZON, 5))
-                    label_method = st.session_state.get(SS_LABEL_METHOD, "expanding")
-                    sliced = slice_by_dates(full_df, start_s, end_s)
-                    X, y, meta_df, _ = extract_xy_from_wide(
-                        sliced,
-                        horizon=horizon,
-                        label_method=label_method,
+        with r1c1:
+            st.markdown("**Time range**")
+            preset_keys = list(presets.keys()) + ["custom"]
+            date_choice = st.radio(
+                "Preset",
+                options=preset_keys,
+                horizontal=True,
+                key="ce_date_preset",
+                label_visibility="collapsed",
+            )
+            dmin = pd.to_datetime(full_df["Date"]).min().date()
+            dmax = pd.to_datetime(full_df["Date"]).max().date()
+            if date_choice == "custom":
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    c_start = st.date_input(
+                        "Start",
+                        value=max(dmin, pd.Timestamp("2010-01-01").date()),
+                        min_value=dmin,
+                        max_value=dmax,
+                        key="ce_start",
                     )
-                    fs = None if fs_method == "none" else fs_method
-                    exp_id = (
-                        f"custom_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                with dc2:
+                    c_end = st.date_input(
+                        "End",
+                        value=min(dmax, pd.Timestamp("2024-12-31").date()),
+                        min_value=dmin,
+                        max_value=dmax,
+                        key="ce_end",
                     )
-                    pipe = RVPipeline(
-                        symbol=symbol,
-                        start_date=start_s,
-                        end_date=end_s,
-                        horizon=horizon,
-                        models=list(models),
-                        n_trials=int(n_trials),
-                        label_method=label_method,
-                        feature_selection=fs,
-                        nested_feature_selection=bool(nested),
-                        top_k_features=int(top_k),
-                        n_splits=int(n_splits),
-                        train_window_size=int(train_window),
-                        test_size=int(test_size),
-                        gap_size=int(gap),
-                        early_stop_patience=int(early_stop),
-                    )
-                    pipe.persist_artifacts = False
-                    pipe.run_id = exp_id
-                    pipe.inject_dataset(X, y, meta_df, raw_df=sliced)
-                    result = pipe.run(persist=False)
+                date_range_key = "custom"
+                start_s = c_start.strftime("%Y-%m-%d")
+                end_s = c_end.strftime("%Y-%m-%d")
+            else:
+                start_s = presets[date_choice]["start"]
+                end_s = presets[date_choice]["end"]
+                date_range_key = date_choice
+                st.caption(f"`{date_choice}`: {start_s} → {end_s}")
 
-                    run_path = run_dir_for_experiment(exp_id)
-                    if run_path.exists():
-                        import shutil
+        with r1c2:
+            st.markdown("**Feature selection**")
+            fs_method = st.selectbox(
+                "Method",
+                ["none", "lasso", "tree_topk", "ttest"],
+                index=1,
+                key="ce_fs",
+            )
+            top_k = st.number_input("Top-K", 3, 40, 12, key="ce_topk")
+            nested = st.checkbox("Nested per-fold", value=False, key="ce_nested")
 
-                        shutil.rmtree(run_path)
-                    pipe.persist_run_artifacts(run_path)
+        with r2c1:
+            st.markdown("**Model & tuning**")
+            models = st.multiselect(
+                "Models",
+                ["lgbm", "xgb", "logistic"],
+                default=["lgbm"],
+                key="ce_models",
+            )
+            n_trials = st.number_input("n_trials", 5, 100, 20, key="ce_trials")
+            early_stop = st.number_input("early_stop", 1, 20, 5, key="ce_early")
 
-                    metrics = result.oof_metrics or {}
-                    row = {
-                        "experiment_id": exp_id,
-                        "symbol": symbol,
-                        "horizon": horizon,
-                        "date_range": date_range_key,
-                        "start": start_s,
-                        "end": end_s,
-                        "feature_selection": fs_method,
-                        "top_k": int(top_k),
-                        "model": result.best_model_name,
-                        "cv_profile": "custom",
-                        "n_splits": int(n_splits),
-                        "train_window": int(train_window),
-                        "test_size": int(test_size),
-                        "gap": int(gap),
-                        "auc": float(result.best_auc),
-                        "brier": float(metrics.get("brier_score", float("nan"))),
-                        "log_loss": float(metrics.get("log_loss", float("nan"))),
-                        "best_params": json.dumps(pipe.best_params or {}),
-                        "selected_features": json.dumps(list(pipe.selected_features or [])),
-                        "source": "custom",
-                        "run_dir": relative_run_dir(run_path),
-                    }
-                    custom_list = list(st.session_state.get(SS_CUSTOM_EXPERIMENTS) or [])
-                    custom_list.insert(0, row)
-                    st.session_state[SS_CUSTOM_EXPERIMENTS] = custom_list
-                    st.session_state["_custom_last"] = row
-                    st.session_state["_dd_auto_id"] = exp_id
-                    checkpoint_current_workspace("custom experiment")
-                    st.success(
-                        f"Done: {result.best_model_name} AUC={result.best_auc:.4f}"
-                    )
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Custom run failed: {exc}")
+        with r2c2:
+            st.markdown("**Cross-validation**")
+            n_splits = st.number_input("n_splits", 3, 20, 12, key="ce_ns")
+            train_window = st.number_input("train_window", 63, 1008, 252, key="ce_tw")
+            test_size = st.number_input("test_size", 5, 126, 21, key="ce_ts")
+            gap = st.number_input("gap", 0, 63, 5, key="ce_gap")
 
-    last = st.session_state.get("_custom_last")
-    if last:
-        st.markdown("**Latest custom result**")
-        st.json(last)
+        if st.button("Run Custom Comparison", type="primary"):
+            if not models:
+                st.warning("Select at least one model.")
+            elif start_s > end_s:
+                st.warning("Invalid date range.")
+            else:
+                with st.spinner("Running RVPipeline..."):
+                    try:
+                        symbol = st.session_state.get(SS_SYMBOL, "SPY")
+                        horizon = int(st.session_state.get(SS_HORIZON, 5))
+                        label_method = st.session_state.get(SS_LABEL_METHOD, "expanding")
+                        sliced = slice_by_dates(full_df, start_s, end_s)
+                        X, y, meta_df, _ = extract_xy_from_wide(
+                            sliced,
+                            horizon=horizon,
+                            label_method=label_method,
+                        )
+                        fs = None if fs_method == "none" else fs_method
+                        exp_id = (
+                            f"custom_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                        )
+                        pipe = RVPipeline(
+                            symbol=symbol,
+                            start_date=start_s,
+                            end_date=end_s,
+                            horizon=horizon,
+                            models=list(models),
+                            n_trials=int(n_trials),
+                            label_method=label_method,
+                            feature_selection=fs,
+                            nested_feature_selection=bool(nested),
+                            top_k_features=int(top_k),
+                            n_splits=int(n_splits),
+                            train_window_size=int(train_window),
+                            test_size=int(test_size),
+                            gap_size=int(gap),
+                            early_stop_patience=int(early_stop),
+                        )
+                        pipe.persist_artifacts = False
+                        pipe.run_id = exp_id
+                        pipe.inject_dataset(X, y, meta_df, raw_df=sliced)
+                        result = pipe.run(persist=False)
+
+                        run_path = run_dir_for_experiment(exp_id)
+                        if run_path.exists():
+                            import shutil
+
+                            shutil.rmtree(run_path)
+                        pipe.persist_run_artifacts(run_path)
+
+                        metrics = result.oof_metrics or {}
+                        row = {
+                            "experiment_id": exp_id,
+                            "symbol": symbol,
+                            "horizon": horizon,
+                            "date_range": date_range_key,
+                            "start": start_s,
+                            "end": end_s,
+                            "feature_selection": fs_method,
+                            "top_k": int(top_k),
+                            "model": result.best_model_name,
+                            "cv_profile": "custom",
+                            "n_splits": int(n_splits),
+                            "train_window": int(train_window),
+                            "test_size": int(test_size),
+                            "gap": int(gap),
+                            "auc": float(result.best_auc),
+                            "brier": float(metrics.get("brier_score", float("nan"))),
+                            "log_loss": float(metrics.get("log_loss", float("nan"))),
+                            "best_params": json.dumps(pipe.best_params or {}),
+                            "selected_features": json.dumps(
+                                list(pipe.selected_features or [])
+                            ),
+                            "source": "custom",
+                            "run_dir": relative_run_dir(run_path),
+                        }
+                        custom_list = list(
+                            st.session_state.get(SS_CUSTOM_EXPERIMENTS) or []
+                        )
+                        custom_list.insert(0, row)
+                        st.session_state[SS_CUSTOM_EXPERIMENTS] = custom_list
+                        st.session_state["_custom_last"] = row
+                        st.session_state["_dd_auto_id"] = exp_id
+                        checkpoint_current_workspace("custom experiment")
+                        st.success(
+                            f"Done: {result.best_model_name} AUC={result.best_auc:.4f}"
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Custom run failed: {exc}")
+
+        last = st.session_state.get("_custom_last")
+        if last:
+            st.markdown("**Latest custom result**")
+            st.json(last)
 
     st.subheader("AI Analysis")
     ctx = {

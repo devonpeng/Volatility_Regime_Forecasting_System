@@ -22,7 +22,7 @@ from project.src.streamlit_app.session_manager import (
     init_session_state,
     is_parquet_workspace,
 )
-from project.src.streamlit_app.workspace import check_tab_sync_warning
+from project.src.streamlit_app.workspace import check_tab_sync_warning, flush_pending_station_widget_syncs
 
 st.set_page_config(
     page_title="RV Prediction Lab",
@@ -63,10 +63,10 @@ if current_page == "comparison" and not is_parquet_workspace():
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Session Status**")
-st.sidebar.markdown(f"- Data loaded: {'yes' if has_data_loaded() else 'no'}")
-st.sidebar.markdown(f"- Features ready: {'yes' if has_features_built() else 'no'}")
-st.sidebar.markdown(f"- Train/Test split: {'yes' if has_train_test_split() else 'no'}")
-st.sidebar.markdown(f"- Model trained: {'yes' if has_model_results() else 'no'}")
+st.sidebar.markdown(f"- Data loaded: {'🟢' if has_data_loaded() else '🔴'}")
+st.sidebar.markdown(f"- Features ready: {'🟢' if has_features_built() else '🔴'}")
+st.sidebar.markdown(f"- Train/Test split: {'🟢' if has_train_test_split() else '🔴'}")
+st.sidebar.markdown(f"- Model trained: {'🟢' if has_model_results() else '🔴'}")
 st.sidebar.markdown(
     f"- Data source: {st.session_state.get('data_source', '?')}"
 )
@@ -79,12 +79,14 @@ else:
     content_col, ai_col = st.columns([3, 1], gap="medium")
 
 with content_col:
+    flush_pending_station_widget_syncs()
+
     if not has_data_loaded():
         st.title("RV Prediction Lab")
         st.info(
-            "Use **Global Settings** in the left sidebar to pick symbol, horizon, "
-            "and dates, then click **Load Teaching Pack**. "
-            "Or open Station 1 and use **Load Live Data**."
+            "In **Station 1**, set the date range and click **Load Teaching Pack** "
+            "(Symbol / Horizon are in the left **Global Settings** sidebar). "
+            "Or use **Load Live Data** on Station 1."
         )
 
     if current_page == "etl":

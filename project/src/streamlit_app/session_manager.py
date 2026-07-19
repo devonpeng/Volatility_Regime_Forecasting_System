@@ -82,6 +82,9 @@ GS_HORIZON = "gs_horizon"
 GS_START = "gs_start"
 GS_END = "gs_end"
 SS_PENDING_GS_SYNC = "_pending_gs_sync"
+SS_PENDING_FEATURE_SYNC = "_pending_feature_sync"
+SS_PENDING_MODEL_SYNC = "_pending_model_sync"
+SS_PENDING_COMPARE_SYNC = "_pending_compare_sync"
 
 # Right AI rail collapse
 SS_AI_RAIL_COLLAPSED = "ai_rail_collapsed"
@@ -205,6 +208,9 @@ def init_session_state() -> None:
         SS_TRAIN_N_TRIALS: 30,
         SS_AI_RAIL_COLLAPSED: False,
         SS_PENDING_GS_SYNC: False,
+        SS_PENDING_FEATURE_SYNC: False,
+        SS_PENDING_MODEL_SYNC: False,
+        SS_PENDING_COMPARE_SYNC: False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:

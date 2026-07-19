@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run SPY offline experiment grid from configs/grid_recipe.yaml via RVPipeline.
 
-Persists each experiment under ``data/precomputed/runs/{experiment_id}/`` and
-writes ``data/precomputed/grid_results.parquet`` (including a ``run_dir`` column).
+Persists each experiment under ``cache/precomputed/runs/{experiment_id}/`` and
+writes ``cache/precomputed/grid_results.parquet`` (including a ``run_dir`` column).
 """
 from __future__ import annotations
 
