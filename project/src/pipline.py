@@ -88,6 +88,8 @@ class RVPipeline:
         self.random_state = random_state
         self.force_rebuild_features = force_rebuild_features
         self.early_stop_patience = early_stop_patience
+        self.persist_artifacts: bool = True
+        self.run_id: str | None = None  # fixed subdirectory under runs_parent when set
 
         self.run_cache: RunCache | None = None
         self.output_dir: Path | None = None
@@ -108,6 +110,23 @@ class RVPipeline:
         self.selected_features: list[str] = []
         self._dataset_cache_key: str | None = None
         self._loaded_from_dataset_cache: bool = False
+        self._skip_feature_build: bool = False
+
+    def inject_dataset(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        meta_df: pd.DataFrame,
+        raw_df: pd.DataFrame | None = None,
+    ) -> None:
+        """Inject a prebuilt dataset (e.g. from teaching Parquet). Skips feature build."""
+        self.X = X.reset_index(drop=True)
+        self.y = y.reset_index(drop=True)
+        self.meta_df = meta_df.reset_index(drop=True)
+        self.raw_df = raw_df if raw_df is not None else meta_df
+        self._skip_feature_build = True
+        self._loaded_from_dataset_cache = True
+        self.selected_features = list(X.columns)
 
     def _pipeline_config(self) -> dict:
         cfg = {
@@ -170,6 +189,10 @@ class RVPipeline:
         return self.raw_df
 
     def build_features(self) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+        if self._skip_feature_build and self.X is not None and self.y is not None:
+            assert self.meta_df is not None
+            return self.X, self.y, self.meta_df
+
         cache_key = self._compute_dataset_cache_key()
         self._dataset_cache_key = cache_key
 
@@ -316,13 +339,25 @@ class RVPipeline:
 
     def _init_run_cache(self) -> RunCache:
         parent = self.runs_parent or get_runs_dir()
-        self.run_cache = RunCache.create(
-            self.best_model_name,
-            self.feature_selection,
-            parent=parent,
-        )
+        if self.run_id:
+            self.run_cache = RunCache(parent / self.run_id)
+        else:
+            self.run_cache = RunCache.create(
+                self.best_model_name,
+                self.feature_selection,
+                parent=parent,
+            )
         self.output_dir = self.run_cache.plots_dir
         return self.run_cache
+
+    def persist_run_artifacts(self, run_dir: Path | None = None) -> Path:
+        """Save run artifacts to *run_dir* (or init via ``run_id`` / default naming)."""
+        if run_dir is not None:
+            self.run_cache = RunCache(Path(run_dir))
+            self.output_dir = self.run_cache.plots_dir
+        elif self.run_cache is None:
+            self._init_run_cache()
+        return self.save_artifacts()
 
     def plot_all(self) -> Path:
         from project.src import plots as plot_module
@@ -431,7 +466,8 @@ class RVPipeline:
             random_state=self.random_state,
         )
 
-    def run(self) -> PipelineResult:
+    def run(self, *, persist: bool | None = None) -> PipelineResult:
+        do_persist = self.persist_artifacts if persist is None else persist
         print(f"Running pipeline for {self.symbol} from {self.start_date} to {self.end_date} with horizon {self.horizon}")
         print(f"Using models: {self.models}")
         print(f"Using feature selection: {self.feature_selection}")
@@ -444,7 +480,7 @@ class RVPipeline:
         print("Building features (with shared dataset cache)...\n")
         self.build_features()
         if self._loaded_from_dataset_cache:
-            print("Features loaded from dataset cache")
+            print("Features loaded from dataset cache / inject")
         else:
             print("Features built successfully")
         print("Running feature selection...\n")
@@ -476,13 +512,16 @@ class RVPipeline:
         self.best_params = best.best_params
         self.evaluate_best()
 
-        self._init_run_cache()
-        plot_dir = self.plot_all()
-        run_dir = self.save_artifacts()
+        plot_dir = None
+        run_dir = None
+        if do_persist:
+            self._init_run_cache()
+            plot_dir = self.plot_all()
+            run_dir = self.save_artifacts()
+            from project.src.eval.reporting import run_dm_evaluation
 
-        from project.src.eval.reporting import run_dm_evaluation
-
-        run_dm_evaluation(run_dir, save_report=True)
+            run_dm_evaluation(run_dir, save_report=True)
+            print(f"Run artifacts saved to: {run_dir}")
 
         result = PipelineResult(
             data_source=data_source,
@@ -501,5 +540,4 @@ class RVPipeline:
             run_dir=run_dir,
             plot_dir=plot_dir,
         )
-        print(f"Run artifacts saved to: {run_dir}")
         return result

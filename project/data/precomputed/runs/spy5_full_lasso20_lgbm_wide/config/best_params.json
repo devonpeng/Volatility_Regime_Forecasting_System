@@ -1,0 +1,15 @@
+{
+  "model": "lgbm",
+  "params": {
+    "n_estimators": 150,
+    "learning_rate": 0.29575737471301594,
+    "num_leaves": 60,
+    "max_depth": 12,
+    "min_child_samples": 20,
+    "subsample": 0.6,
+    "colsample_bytree": 0.9,
+    "reg_alpha": 7.17396528378094e-06,
+    "reg_lambda": 9.558031676999835e-05,
+    "class_weight": null
+  }
+}

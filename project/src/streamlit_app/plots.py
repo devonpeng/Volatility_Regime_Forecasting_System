@@ -342,3 +342,691 @@ def fig_feature_correlation(df: pd.DataFrame) -> go.Figure:
         margin=dict(l=80, r=30, t=50, b=120),
     )
     return fig
+
+
+_RIGHT_LEGEND = dict(
+    orientation="v",
+    yanchor="top",
+    y=1,
+    xanchor="left",
+    x=1.02,
+)
+
+# English captions rendered under charts via ``st.caption``.
+CAPTION_BUBBLE = (
+    "AUC higher = better ranking of high-vol days. "
+    "Brier / LogLoss higher = worse probability quality. "
+    "Bubble size = top_k (number of selected features)."
+)
+CAPTION_RADAR = (
+    "Radar axes for Brier and LogLoss are inverted so outward is better. "
+    "AUC higher (farther out) = better discrimination."
+)
+CAPTION_CM = (
+    "Cell counts of true vs predicted labels. "
+    "Off-diagonal cells are errors (false positives / false negatives)."
+)
+CAPTION_REGIME_TIMELINE = (
+    "Higher marker level = higher macro indicator (e.g. VIX). "
+    "Cluster_1 = highest-mean / highest-risk regime."
+)
+CAPTION_CLUSTER_SCATTER = (
+    "Same regime meaning as the timeline: Cluster_1 is highest-risk. "
+    "Markers show macro level vs time index."
+)
+CAPTION_PRED_VS_ACTUAL = (
+    "Top: y-position = actual label (0/1); marker colour = predicted class "
+    "(red = prob < 0.5, green = prob ≥ 0.5). "
+    "Bottom: predicted probability (and normalized forward RV). "
+    "Redder background bands = higher-risk macro regime."
+)
+
+
+def fig_bubble_scatter(df: pd.DataFrame) -> go.Figure:
+    """Bubble chart: X=brier, Y=auc, color=log_loss, size=top_k."""
+    plot_df = df.copy()
+    need = ["brier", "auc"]
+    for col in need:
+        if col not in plot_df.columns:
+            fig = go.Figure()
+            fig.update_layout(
+                title="Bubble chart unavailable (missing brier/auc)",
+                template=_TEMPLATE,
+            )
+            return fig
+
+    x = pd.to_numeric(plot_df["brier"], errors="coerce")
+    y = pd.to_numeric(plot_df["auc"], errors="coerce")
+    color = (
+        pd.to_numeric(plot_df["log_loss"], errors="coerce")
+        if "log_loss" in plot_df.columns
+        else pd.Series(np.zeros(len(plot_df)))
+    )
+    size_raw = (
+        pd.to_numeric(plot_df["top_k"], errors="coerce")
+        if "top_k" in plot_df.columns
+        else pd.Series(np.full(len(plot_df), 10.0))
+    )
+    size_raw = size_raw.fillna(size_raw.median() if size_raw.notna().any() else 10.0)
+    smin, smax = float(size_raw.min()), float(size_raw.max())
+    if smax > smin:
+        sizes = 8.0 + 28.0 * (size_raw - smin) / (smax - smin)
+    else:
+        sizes = pd.Series(np.full(len(plot_df), 16.0))
+
+    labels = []
+    for i, row in plot_df.iterrows():
+        eid = row.get("experiment_id") or row.get("model") or i
+        labels.append(str(eid)[:48])
+
+    hover = (
+        "id: %{customdata[0]}<br>"
+        "model: %{customdata[1]}<br>"
+        "top_k: %{customdata[2]}<br>"
+        "brier: %{x:.4f}<br>"
+        "auc: %{y:.4f}<br>"
+        "log_loss: %{marker.color:.4f}<extra></extra>"
+    )
+    custom = np.column_stack(
+        [
+            labels,
+            plot_df["model"].astype(str).tolist()
+            if "model" in plot_df.columns
+            else ["—"] * len(plot_df),
+            size_raw.astype(str).tolist(),
+        ]
+    )
+
+    fig = go.Figure(
+        data=go.Scatter(
+            x=x,
+            y=y,
+            mode="markers",
+            name="Experiments",
+            marker=dict(
+                size=sizes,
+                color=color,
+                colorscale="Viridis_r",
+                showscale=True,
+                colorbar=dict(title="log_loss", x=1.18),
+                line=dict(width=0.5, color="rgba(0,0,0,0.35)"),
+                opacity=0.85,
+            ),
+            customdata=custom,
+            hovertemplate=hover,
+        )
+    )
+    fig.update_layout(
+        template=_TEMPLATE,
+        title=dict(text="Experiment bubble chart", x=0.5, xanchor="center"),
+        xaxis_title="Brier (lower is better)",
+        yaxis_title="AUC (higher is better)",
+        height=440,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=60, r=140, t=50, b=50),
+    )
+    return fig
+
+
+def fig_metrics_radar(rows: pd.DataFrame, metrics: list[str]) -> go.Figure:
+    """Radar chart for selected experiments (inverts brier/log_loss to 'higher=better')."""
+    fig = go.Figure()
+    for _, row in rows.iterrows():
+        values = []
+        for m in metrics:
+            v = float(row.get(m, 0.0))
+            if m in ("brier", "log_loss"):
+                v = 1.0 / (1.0 + max(v, 0.0))
+            values.append(v)
+        label = str(row.get("experiment_id") or row.get("model") or _)
+        fig.add_trace(
+            go.Scatterpolar(
+                r=values + values[:1],
+                theta=metrics + metrics[:1],
+                fill="toself",
+                name=label[:40],
+            )
+        )
+    fig.update_layout(
+        template=_TEMPLATE,
+        title="Metrics radar (brier/log_loss inverted)",
+        polar=dict(radialaxis=dict(visible=True)),
+        height=420,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=50, r=140, t=50, b=40),
+    )
+    return fig
+
+
+_CLUSTER_PALETTE = [
+    "#e53935", "#1e88e5", "#43a047", "#fb8c00",
+    "#8e24aa", "#00897b", "#6d4c41", "#546e7a",
+]
+
+_REGIME_BAND_COLORS = [
+    "rgba(229, 57, 53, 0.18)",   # Cluster_1 high risk
+    "rgba(67, 160, 71, 0.12)",   # lower risk
+    "rgba(30, 136, 229, 0.10)",
+    "rgba(251, 140, 0, 0.10)",
+]
+
+
+def _cluster_colors(n: int) -> list[str]:
+    if n <= 0:
+        return []
+    return [_CLUSTER_PALETTE[i % len(_CLUSTER_PALETTE)] for i in range(n)]
+
+
+def _minmax_normalize(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return np.full_like(arr, np.nan, dtype=float)
+    lo = float(np.nanmin(arr[finite]))
+    hi = float(np.nanmax(arr[finite]))
+    if hi <= lo:
+        out = np.full_like(arr, 0.5, dtype=float)
+        out[~finite] = np.nan
+        return out
+    out = (arr - lo) / (hi - lo)
+    out[~finite] = np.nan
+    return out
+
+
+def _regime_vrect_shapes(
+    x: pd.Series,
+    regimes: np.ndarray,
+    cluster_order: list | None,
+    *,
+    yref: str = "y",
+    y0: float = 0.0,
+    y1: float = 1.0,
+) -> list[dict]:
+    """Build vertical band shapes for a single cartesian axes pair."""
+    regimes = np.asarray(regimes, dtype=object)
+    n = min(len(x), len(regimes))
+    if n == 0:
+        return []
+    x = x.iloc[:n]
+    regimes = regimes[:n]
+    order = list(cluster_order) if cluster_order else sorted(set(regimes.tolist()), key=str)
+    color_map = {
+        cname: _REGIME_BAND_COLORS[i % len(_REGIME_BAND_COLORS)]
+        for i, cname in enumerate(order)
+    }
+
+    shapes: list[dict] = []
+    i = 0
+    while i < n:
+        cname = regimes[i]
+        j = i + 1
+        while j < n and regimes[j] == cname:
+            j += 1
+        x0 = x.iloc[i]
+        x1 = x.iloc[j - 1]
+        fill = color_map.get(str(cname), "rgba(128,128,128,0.08)")
+        shapes.append(
+            dict(
+                type="rect",
+                xref="x",
+                yref=yref,
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                fillcolor=fill,
+                line=dict(width=0),
+                layer="below",
+            )
+        )
+        i = j
+    return shapes
+
+
+def _add_regime_legend(
+    fig: go.Figure,
+    regimes: np.ndarray,
+    cluster_order: list | None,
+) -> None:
+    order = list(cluster_order) if cluster_order else sorted(set(regimes.tolist()), key=str)
+    for i, cname in enumerate(order):
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                name=f"{cname} regime",
+                marker=dict(
+                    size=10,
+                    color=_CLUSTER_PALETTE[i % len(_CLUSTER_PALETTE)],
+                    symbol="square",
+                ),
+                hoverinfo="skip",
+            )
+        )
+
+
+def fig_pred_vs_actual(
+    dates,
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    *,
+    title: str = "Predictions vs Actual Labels",
+    actual_rv: np.ndarray | None = None,
+    regime_labels: np.ndarray | None = None,
+    cluster_order: list | None = None,
+) -> tuple[go.Figure, go.Figure]:
+    """Return two independent figures: actual labels, then predicted prob (+ RV).
+
+    Split charts avoid Plotly ``make_subplots`` marker rendering issues seen in
+    Streamlit while keeping shared calendar / regime context.
+    """
+    x = pd.to_datetime(pd.Series(dates))
+    y = np.asarray(y_true, dtype=float)
+    proba = np.asarray(y_proba, dtype=float)
+    n = min(len(x), len(y), len(proba))
+    x, y, proba = x.iloc[:n], y[:n], proba[:n]
+    x_list = x.tolist()
+
+    regimes = None
+    if regime_labels is not None:
+        raw = np.asarray(regime_labels, dtype=object)
+        if len(raw) >= n:
+            regimes = raw[:n]
+
+    # ── Top: actual binary labels ──────────────────────────────────────
+    fig_labels = go.Figure()
+    if regimes is not None:
+        fig_labels.update_layout(
+            shapes=_regime_vrect_shapes(
+                x, regimes, cluster_order, yref="y", y0=-0.1, y1=1.1
+            )
+        )
+
+    label_styles = (
+        (False, "Pred = 0 (prob < 0.5)", "#d7191c"),
+        (True, "Pred = 1 (prob ≥ 0.5)", "#1a9641"),
+    )
+    pred_pos = np.isfinite(proba) & (proba >= 0.5)
+    for is_pos, name, color in label_styles:
+        mask = np.isfinite(y) & np.isfinite(proba) & (pred_pos if is_pos else ~pred_pos)
+        if not mask.any():
+            continue
+        idx = np.flatnonzero(mask)
+        fig_labels.add_trace(
+            go.Scatter(
+                x=[x_list[i] for i in idx],
+                y=y[mask].tolist(),
+                mode="markers",
+                name=name,
+                marker=dict(
+                    size=9,
+                    color=color,
+                    line=dict(width=0.4, color="rgba(0,0,0,0.25)"),
+                ),
+                customdata=np.asarray(proba[mask], dtype=float),
+                hovertemplate=(
+                    "%{x|%Y-%m-%d}<br>Actual label: %{y}"
+                    "<br>Pred. prob: %{customdata:.3f}<extra></extra>"
+                ),
+                cliponaxis=False,
+            )
+        )
+
+    if regimes is not None:
+        _add_regime_legend(fig_labels, regimes, cluster_order)
+
+    fig_labels.update_yaxes(
+        title_text="Actual Label",
+        tickvals=[0, 1],
+        range=[-0.1, 1.1],
+    )
+    fig_labels.update_xaxes(showticklabels=False)
+    fig_labels.update_layout(
+        template=_TEMPLATE,
+        title=dict(
+            text=f"{title} — Actual Labels",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=15),
+        ),
+        height=260,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=60, r=150, t=50, b=10),
+    )
+
+    # ── Bottom: predicted probability (+ optional RV) ──────────────────
+    fig_proba = go.Figure()
+    if regimes is not None:
+        fig_proba.update_layout(
+            shapes=_regime_vrect_shapes(
+                x, regimes, cluster_order, yref="y", y0=-0.05, y1=1.05
+            )
+        )
+
+    fig_proba.add_trace(
+        go.Scatter(
+            x=x_list,
+            y=proba.tolist(),
+            mode="lines",
+            name="Predicted prob",
+            line=dict(color="#9467bd", width=1.5),
+            hovertemplate="%{x|%Y-%m-%d}<br>Prob: %{y:.4f}<extra></extra>",
+        )
+    )
+
+    if actual_rv is not None:
+        rv = np.asarray(actual_rv, dtype=float)
+        if len(rv) >= n:
+            rv_norm = _minmax_normalize(rv[:n])
+            fig_proba.add_trace(
+                go.Scatter(
+                    x=x_list,
+                    y=rv_norm.tolist(),
+                    mode="lines",
+                    name="Actual RV (normalized)",
+                    line=dict(color=_COLOUR_ACTUAL_RV, width=1.2),
+                    hovertemplate="%{x|%Y-%m-%d}<br>RV (norm): %{y:.3f}<extra></extra>",
+                )
+            )
+
+    fig_proba.add_hline(
+        y=0.5,
+        line=dict(color=_COLOUR_DIAGONAL, width=1, dash="dash"),
+    )
+    if regimes is not None:
+        _add_regime_legend(fig_proba, regimes, cluster_order)
+
+    fig_proba.update_yaxes(
+        title_text="Prob / RV (norm)",
+        range=[-0.05, 1.05],
+        dtick=0.25,
+    )
+    fig_proba.update_xaxes(title_text="Date")
+    fig_proba.update_layout(
+        template=_TEMPLATE,
+        title=dict(
+            text=f"{title} — Predicted Probability",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=15),
+        ),
+        height=340,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=60, r=150, t=50, b=40),
+    )
+    return fig_labels, fig_proba
+
+
+def fig_confusion_matrices(
+    report: dict,
+    split: dict | None = None,
+) -> go.Figure:
+    """Overall + per-cluster confusion matrix heatmaps (Plotly port of eval CM)."""
+    from sklearn.metrics import confusion_matrix as sk_cm
+
+    split = split or report.get("regime_split") or {}
+    gcm = split.get("group_confusion_matrices") or {}
+    cluster_keys = [k for k in gcm if k != "Overall"]
+    # Prefer ordered keys when available
+    try:
+        from project.src.eval.regime import ordered_group_keys
+
+        ordered = [k for k in ordered_group_keys(gcm) if k != "Overall"]
+        if ordered:
+            cluster_keys = ordered
+    except Exception:
+        pass
+
+    panels: list[tuple[str, np.ndarray, int]] = []
+    overall = gcm.get("Overall")
+    if overall is not None:
+        panels.append(
+            (
+                f"Overall ({overall.get('n_samples', '?')})",
+                np.asarray(overall["confusion_matrix"], dtype=int),
+                int(overall.get("n_samples", 0)),
+            )
+        )
+    else:
+        y_true = np.asarray(report.get("_y_valid", []), dtype=int)
+        y_pred = (np.asarray(report.get("_model_proba", [])) >= 0.5).astype(int)
+        if len(y_true) and len(y_pred) == len(y_true):
+            cm = sk_cm(y_true, y_pred, labels=[0, 1])
+            panels.append((f"Overall ({len(y_true)})", cm, len(y_true)))
+
+    means = split.get("cluster_means") or {}
+    for name in cluster_keys:
+        stats = gcm[name]
+        mean_txt = f", mean={means[name]:.2f}" if name in means else ""
+        panels.append(
+            (
+                f"{name} ({stats.get('n_samples', '?')}{mean_txt})",
+                np.asarray(stats["confusion_matrix"], dtype=int),
+                int(stats.get("n_samples", 0)),
+            )
+        )
+
+    if not panels:
+        fig = go.Figure()
+        fig.update_layout(title="No confusion matrices available", template=_TEMPLATE)
+        return fig
+
+    n = len(panels)
+    fig = make_subplots(
+        rows=1,
+        cols=n,
+        subplot_titles=[p[0] for p in panels],
+        horizontal_spacing=0.08,
+    )
+    for i, (title, cm, _) in enumerate(panels, start=1):
+        fig.add_trace(
+            go.Heatmap(
+                z=cm,
+                x=["Pred 0", "Pred 1"],
+                y=["True 0", "True 1"],
+                text=cm,
+                texttemplate="%{text}",
+                colorscale="Blues",
+                showscale=(i == n),
+                hovertemplate="%{y} / %{x}: %{z}<extra></extra>",
+            ),
+            row=1,
+            col=i,
+        )
+    display = split.get("method_display") or split.get("method") or "regime"
+    n_regimes = split.get("n_regimes", report.get("n_regimes", "?"))
+    fig.update_layout(
+        template=_TEMPLATE,
+        title=dict(
+            text=(
+                f"Confusion Matrices — {display} (n={n_regimes}) | "
+                f"Model: {report.get('best_model_name')} | "
+                f"Horizon={report.get('horizon')}D"
+            ),
+            x=0.5,
+            xanchor="center",
+        ),
+        height=360,
+        margin=dict(l=50, r=40, t=80, b=40),
+    )
+    return fig
+
+
+def fig_macro_regime_timeline(
+    report: dict,
+    split: dict | None = None,
+) -> go.Figure:
+    """Macro indicator over OOF time, coloured by regime cluster."""
+    split = split or report.get("regime_split") or {}
+    regimes = np.asarray(split.get("_Regime", []), dtype=object)
+    indicator = split.get("macro_indicator", "macro")
+    raw_key = f"raw_{indicator}"
+    macro = split.get(raw_key)
+    if macro is None:
+        for k, v in split.items():
+            if str(k).startswith("raw_") and isinstance(v, list):
+                macro = v
+                break
+    macro = np.asarray(macro if macro is not None else [], dtype=float)
+    n = len(macro)
+    if n == 0 or len(regimes) != n:
+        fig = go.Figure()
+        fig.update_layout(title="No macro regime timeline available", template=_TEMPLATE)
+        return fig
+
+    date_list = report.get("_dates", list(range(n)))
+    if len(date_list) != n:
+        date_list = list(range(n))
+    try:
+        x = pd.to_datetime(pd.Series(date_list))
+    except Exception:
+        x = pd.Series(date_list)
+
+    cluster_order = split.get("cluster_order") or sorted(set(regimes.tolist()), key=str)
+    colors = _cluster_colors(len(cluster_order))
+    means = split.get("cluster_means") or {}
+
+    fig = go.Figure()
+    for i, cname in enumerate(cluster_order):
+        mask = regimes == cname
+        mean_txt = f", μ={means[cname]:.2f}" if cname in means else ""
+        fig.add_trace(
+            go.Scatter(
+                x=x[mask],
+                y=macro[mask],
+                mode="markers",
+                name=f"{cname} (n={int(mask.sum())}{mean_txt})",
+                marker=dict(size=6, color=colors[i], opacity=0.75),
+                hovertemplate="%{x}<br>Macro: %{y:.3f}<extra></extra>",
+            )
+        )
+
+    display = split.get("method_display") or split.get("method") or "regime"
+    n_regimes = split.get("n_regimes", report.get("n_regimes", "?"))
+    fig.update_layout(
+        template=_TEMPLATE,
+        title=dict(
+            text=f"Macro Regime Timeline — {display} (n={n_regimes}) | Indicator={indicator}",
+            x=0.5,
+            xanchor="center",
+        ),
+        xaxis_title="Date",
+        yaxis_title="Macro Indicator Value",
+        height=380,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=50, r=150, t=70, b=40),
+    )
+    return fig
+
+
+def fig_cluster_scatter(
+    report: dict,
+    split: dict | None = None,
+) -> go.Figure:
+    """(time_index, macro) scatter coloured by cluster."""
+    split = split or report.get("regime_split") or {}
+    regimes = np.asarray(split.get("_Regime", []), dtype=object)
+    indicator = split.get("macro_indicator", "macro")
+    raw_key = f"raw_{indicator}"
+    macro = split.get(raw_key)
+    if macro is None:
+        for k, v in split.items():
+            if str(k).startswith("raw_") and isinstance(v, list):
+                macro = v
+                break
+    macro = np.asarray(macro if macro is not None else [], dtype=float)
+    n = len(macro)
+    if n == 0 or len(regimes) != n:
+        fig = go.Figure()
+        fig.update_layout(title="No cluster scatter available", template=_TEMPLATE)
+        return fig
+
+    cluster_order = split.get("cluster_order") or sorted(set(regimes.tolist()), key=str)
+    colors = _cluster_colors(len(cluster_order))
+    means = split.get("cluster_means") or {}
+    x = np.arange(n, dtype=float)
+
+    fig = go.Figure()
+    for i, cname in enumerate(cluster_order):
+        mask = regimes == cname
+        mean_txt = f" μ={means[cname]:.2f}" if cname in means else ""
+        fig.add_trace(
+            go.Scatter(
+                x=x[mask],
+                y=macro[mask],
+                mode="markers",
+                name=f"{cname}{mean_txt}",
+                marker=dict(
+                    size=7,
+                    color=colors[i],
+                    opacity=0.8,
+                    line=dict(width=0.3, color="black"),
+                ),
+            )
+        )
+        if cname in means and mask.any():
+            fig.add_trace(
+                go.Scatter(
+                    x=[float(x[mask].mean())],
+                    y=[float(means[cname])],
+                    mode="markers",
+                    name=f"{cname} centroid",
+                    marker=dict(symbol="x", size=12, color="black", line=dict(width=2)),
+                    showlegend=False,
+                )
+            )
+
+    display = split.get("method_display") or split.get("method") or "regime"
+    n_regimes = split.get("n_regimes", report.get("n_regimes", "?"))
+    fig.update_layout(
+        template=_TEMPLATE,
+        title=dict(text=f"Cluster Scatter — {display} (n={n_regimes})", x=0.5, xanchor="center"),
+        xaxis_title="Time index",
+        yaxis_title="Macro indicator",
+        height=400,
+        showlegend=True,
+        legend=_RIGHT_LEGEND,
+        margin=dict(l=50, r=150, t=70, b=40),
+    )
+    return fig
+
+
+def dm_baselines_dataframe(report: dict) -> pd.DataFrame:
+    """Flatten Diebold-Mariano baseline comparison rows for Streamlit tables."""
+    rows = []
+    for bl in report.get("baselines_compared") or []:
+        metrics = bl.get("metrics") or {}
+        dm_b = bl.get("dm_brier") or {}
+        dm_l = bl.get("dm_log_loss") or {}
+        rows.append(
+            {
+                "baseline": bl.get("name"),
+                "brier": metrics.get("brier"),
+                "log_loss": metrics.get("log_loss"),
+                "dm_brier_stat": dm_b.get("dm_stat"),
+                "dm_brier_pvalue": dm_b.get("p_value_two_sided"),
+                "dm_logloss_stat": dm_l.get("dm_stat"),
+                "dm_logloss_pvalue": dm_l.get("p_value_two_sided"),
+            }
+        )
+    if not rows:
+        dm_b = report.get("dm_brier") or {}
+        dm_l = report.get("dm_log_loss") or {}
+        rows.append(
+            {
+                "baseline": report.get("baseline"),
+                "brier": (report.get("baseline_metrics") or {}).get("brier"),
+                "log_loss": (report.get("baseline_metrics") or {}).get("log_loss"),
+                "dm_brier_stat": dm_b.get("dm_stat"),
+                "dm_brier_pvalue": dm_b.get("p_value_two_sided"),
+                "dm_logloss_stat": dm_l.get("dm_stat"),
+                "dm_logloss_pvalue": dm_l.get("p_value_two_sided"),
+            }
+        )
+    return pd.DataFrame(rows)

@@ -1,0 +1,9 @@
+{
+  "models": [
+    {
+      "name": "lgbm",
+      "best_auc": 0.5,
+      "best_params": {}
+    }
+  ]
+}

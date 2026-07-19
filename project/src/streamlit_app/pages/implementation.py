@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 _REPO_ROOT = next(
@@ -18,18 +17,35 @@ if _REPO_ROOT is not None and str(_REPO_ROOT) not in sys.path:
 
 from project.src.models.evaluator import compute_oof_metrics, evaluate_oof
 from project.src.models.registry import build_model
+from project.src.streamlit_app.ai_tutor import (
+    get_active_llm_creds,
+    render_analyze_button,
+    render_shap_section,
+)
+from project.src.streamlit_app.eval_ui import (
+    actual_rv_aligned_to_dates,
+    holdout_predictions_from_session,
+    regime_bands_aligned_to_dates,
+)
 from project.src.streamlit_app.llm_helper import generate_llm_brief
 from project.src.streamlit_app.plots import (
+    CAPTION_PRED_VS_ACTUAL,
     fig_feature_importance,
     fig_model_comparison,
     fig_optuna_history,
+    fig_pred_vs_actual,
     fig_roc_curve,
 )
+from project.src.streamlit_app.precomputed import feature_column_names
 from project.src.streamlit_app.session_manager import (
     SS_BEST_MODEL_NAME,
     SS_BEST_PARAMS,
     SS_CV,
+    SS_DATE_END,
+    SS_DATE_START,
     SS_FEATURE_SELECTION,
+    SS_FULL_DF,
+    SS_HORIZON,
     SS_META_DF,
     SS_MODEL_RESULTS,
     SS_OOF_METRICS,
@@ -41,12 +57,10 @@ from project.src.streamlit_app.session_manager import (
     SS_TOP_K,
     SS_TRAIN_RATIO,
     SS_X,
-    SS_X_TEST,
-    SS_X_TRAIN,
     SS_Y,
-    SS_Y_TRAIN,
     has_model_results,
 )
+from project.src.streamlit_app.workspace import checkpoint_current_workspace
 
 
 def _get_feature_importances(model, feature_names: list[str]) -> dict[str, float]:
@@ -160,6 +174,7 @@ def render() -> None:
             oof_proba_full = oof_full
             oof_valid = oof_v
             y_valid = y_v
+            checkpoint_current_workspace("oof evaluation")
             st.rerun()
         except Exception as exc:
             st.error(f"OOF evaluation failed: {exc}")
@@ -199,118 +214,125 @@ def render() -> None:
             fig = fig_roc_curve(y_valid, oof_valid)
             st.plotly_chart(fig, use_container_width=True)
 
-        # ── 4d. Actual Volatility (Full Range) ───────────────────────
-        st.subheader("4d. Actual Volatility (Full Time Range)")
+        # ── 4d. Predictions vs Actual ───────────────────────────────
+        st.subheader("4d. Predictions vs Actual")
+        pred_mode = st.radio(
+            "Prediction mode",
+            options=["eval", "test"],
+            format_func=lambda m: "Eval (OOF)" if m == "eval" else "Test (holdout)",
+            horizontal=True,
+            index=0,
+            key="impl_pred_mode",
+        )
+        train_ratio = float(st.session_state.get(SS_TRAIN_RATIO, 0.8))
 
-        target_col = st.session_state.get(SS_TARGET_COL, "")
-
-        if meta_df is not None:
-            plot_df = meta_df.copy()
-            if "Date" in plot_df.columns and not pd.api.types.is_datetime64_any_dtype(plot_df["Date"]):
-                plot_df["Date"] = pd.to_datetime(plot_df["Date"])
-            plot_df = plot_df.sort_values("Date").reset_index(drop=True)
-
-            fig_actual = go.Figure()
-            if target_col and target_col in plot_df.columns:
-                fig_actual.add_trace(go.Scatter(
-                    x=plot_df["Date"], y=plot_df[target_col].values,
-                    mode="lines", name="Actual RV (Annualized)",
-                    line=dict(color="#2c7bb6", width=2),
-                    hovertemplate="%{x|%Y-%m-%d}<br>Actual RV: %{y:.4f}<extra></extra>",
-                ))
-            rv_max = float(plot_df[target_col].max())
-            y_max = float(np.ceil(rv_max * 1.15 / 0.05) * 0.05)
-            fig_actual.update_layout(
-                template="plotly_white",
-                title=dict(text="Annualized Realized Volatility", x=0.5, xanchor="center"),
-                xaxis=dict(title="Date"),
-                yaxis=dict(title="Volatility", dtick=0.1, range=[0, y_max]),
-                width=1000, height=350,
-                margin=dict(l=60, r=30, t=40, b=40),
-            )
-            st.plotly_chart(fig_actual, use_container_width=True)
-
-        # ── 4e. Predicted Probability (Test Set) ────────────────────
-        st.subheader("4e. Model Predicted Probability (Test Set)")
-
-        X_train = st.session_state.get(SS_X_TRAIN)
-        X_test = st.session_state.get(SS_X_TEST)
-        test_proba_arr = None
-        test_dates_arr = None
-
-        if X_train is not None and X_test is not None and best_model_name:
-            from sklearn.preprocessing import RobustScaler
-            scaler = RobustScaler()
-            X_train_scaled = scaler.fit_transform(X_train.to_numpy())
-            X_test_scaled = scaler.transform(X_test.to_numpy())
-            if best_model_name == "lgbm":
-                model_test = build_model(best_model_name, best_params)
-                model_test.fit(pd.DataFrame(X_train_scaled, columns=X_train.columns),
-                               st.session_state[SS_Y_TRAIN].to_numpy())
+        try:
+            full_df = st.session_state.get(SS_FULL_DF)
+            horizon = int(st.session_state.get(SS_HORIZON, 5))
+            date_start = st.session_state.get(SS_DATE_START)
+            date_end = st.session_state.get(SS_DATE_END)
+            if pred_mode == "eval":
+                if oof_proba_full is not None and meta_df is not None:
+                    plot_df = meta_df.copy()
+                    plot_df["oof_proba"] = oof_proba_full
+                    valid = plot_df.dropna(subset=["oof_proba"])
+                    dates = valid["Date"] if "Date" in valid.columns else valid.index
+                    y_plot = valid["y"].to_numpy() if "y" in valid.columns else np.asarray(y_valid)
+                    proba_plot = valid["oof_proba"].to_numpy()
+                    title = "Eval (OOF): Predictions vs Actual"
+                    actual_rv = actual_rv_aligned_to_dates(
+                        dates, horizon=horizon, full_df=full_df
+                    )
+                    regime_labels, cluster_order = regime_bands_aligned_to_dates(
+                        dates,
+                        full_df=full_df,
+                        start_date=date_start,
+                        end_date=date_end,
+                    )
+                    fig_labels, fig_proba = fig_pred_vs_actual(
+                        dates,
+                        y_plot,
+                        proba_plot,
+                        title=title,
+                        actual_rv=actual_rv,
+                        regime_labels=regime_labels,
+                        cluster_order=cluster_order,
+                    )
+                    st.plotly_chart(fig_labels, use_container_width=True)
+                    st.plotly_chart(fig_proba, use_container_width=True)
+                    st.caption(CAPTION_PRED_VS_ACTUAL)
+                else:
+                    st.info("OOF predictions not available yet.")
             else:
-                model_test = build_model(best_model_name, best_params)
-                model_test.fit(X_train_scaled, st.session_state[SS_Y_TRAIN].to_numpy())
-            test_proba_arr = model_test.predict_proba(
-                pd.DataFrame(X_test_scaled, columns=X_test.columns)
-                if best_model_name == "lgbm" else X_test_scaled
-            )[:, 1]
-            train_ratio = st.session_state.get(SS_TRAIN_RATIO, 0.8)
-            split_idx = int(len(meta_df) * train_ratio) if meta_df is not None else 0
-            test_dates_arr = meta_df.iloc[split_idx:]["Date"].values if meta_df is not None else None
+                dates, y_test, test_proba = holdout_predictions_from_session(
+                    X=X,
+                    y=y,
+                    meta_df=meta_df,
+                    model_name=best_model_name,
+                    best_params=best_params,
+                    train_ratio=train_ratio,
+                )
+                title = f"Test holdout (train_ratio={train_ratio:.2f}): Predictions vs Actual"
+                actual_rv = actual_rv_aligned_to_dates(
+                    dates, horizon=horizon, full_df=full_df
+                )
+                regime_labels, cluster_order = regime_bands_aligned_to_dates(
+                    dates,
+                    full_df=full_df,
+                    start_date=date_start,
+                    end_date=date_end,
+                )
+                fig_labels, fig_proba = fig_pred_vs_actual(
+                    dates,
+                    y_test,
+                    test_proba,
+                    title=title,
+                    actual_rv=actual_rv,
+                    regime_labels=regime_labels,
+                    cluster_order=cluster_order,
+                )
+                st.plotly_chart(fig_labels, use_container_width=True)
+                st.plotly_chart(fig_proba, use_container_width=True)
+                st.caption(CAPTION_PRED_VS_ACTUAL)
+        except Exception as exc:
+            st.warning(f"Pred vs actual unavailable: {exc}")
 
-        if test_proba_arr is not None and test_dates_arr is not None:
-            test_dt = pd.to_datetime(pd.Series(test_dates_arr))
-            fig_pred = go.Figure()
-            fig_pred.add_hline(y=0.5, line=dict(color="#888888", width=1, dash="dot"),
-                               annotation_text="Threshold 0.5", annotation_position="right")
-            fig_pred.add_trace(go.Scatter(
-                x=test_dt, y=test_proba_arr,
-                mode="lines", name="Predicted Probability",
-                line=dict(color="#d73027", width=2, dash="dash"),
-                hovertemplate="%{x|%Y-%m-%d}<br>Prob: %{y:.4f}<extra></extra>",
-            ))
-            fig_pred.update_layout(
-                template="plotly_white",
-                title=dict(text="Predicted High-Volatility Probability (Test Set)", x=0.5, xanchor="center"),
-                xaxis=dict(title="Date"),
-                yaxis=dict(title="Probability", range=[-0.05, 1.05], dtick=0.1),
-                width=1000, height=350,
-                margin=dict(l=60, r=30, t=40, b=40),
+        # Confusion summary on OOF (when available)
+        if oof_proba_full is not None and meta_df is not None:
+            valid = meta_df.copy()
+            valid["oof_proba"] = oof_proba_full
+            valid = valid.dropna(subset=["oof_proba"])
+            valid["_correct"] = (
+                ((valid["y"] == 1) & (valid["oof_proba"] >= 0.5)) |
+                ((valid["y"] == 0) & (valid["oof_proba"] < 0.5))
             )
-            st.plotly_chart(fig_pred, use_container_width=True)
+            n_correct = valid["_correct"].sum()
+            n_total = len(valid)
+            fp_count = ((valid["y"] == 0) & (valid["oof_proba"] >= 0.5)).sum()
+            fn_count = ((valid["y"] == 1) & (valid["oof_proba"] < 0.5)).sum()
 
-            # Confusion matrix on OOF (when available)
-            if oof_proba_full is not None:
-                valid = meta_df.copy()
-                valid["oof_proba"] = oof_proba_full
-                valid = valid.dropna(subset=["oof_proba"])
-                valid["_correct"] = (
-                    ((valid["y"] == 1) & (valid["oof_proba"] >= 0.5)) |
-                    ((valid["y"] == 0) & (valid["oof_proba"] < 0.5))
-                )
-                n_correct = valid["_correct"].sum()
-                n_total = len(valid)
-                fp_count = ((valid["y"] == 0) & (valid["oof_proba"] >= 0.5)).sum()
-                fn_count = ((valid["y"] == 1) & (valid["oof_proba"] < 0.5)).sum()
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric(
+                "Accuracy",
+                f"{n_correct:,} / {n_total:,}",
+                delta=f"{n_correct / n_total * 100:.1f}%",
+            )
+            col_b.metric("False Positives (FP)", f"{fp_count:,}")
+            col_c.metric("False Negatives (FN)", f"{fn_count:,}")
 
-                col_a, col_b, col_c = st.columns(3)
-                col_a.metric("Accuracy", f"{n_correct:,} / {n_total:,}",
-                             delta=f"{n_correct / n_total * 100:.1f}%")
-                col_b.metric("False Positives (FP)", f"{fp_count:,}")
-                col_c.metric("False Negatives (FN)", f"{fn_count:,}")
-
-                # CSV export
-                csv_cols = ["Date", "y", "oof_proba"]
-                if target_col and target_col in valid.columns:
-                    csv_cols.append(target_col)
-                csv_df = valid[csv_cols].copy() if "Date" in valid.columns else valid[csv_cols].copy()
-                csv_str = csv_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Export OOF Predictions as CSV",
-                    data=csv_str,
-                    file_name="oof_predictions.csv",
-                    mime="text/csv",
-                )
+            csv_cols = ["Date", "y", "oof_proba"]
+            target_col = st.session_state.get(SS_TARGET_COL) or ""
+            if target_col and target_col in valid.columns:
+                csv_cols.append(target_col)
+            csv_cols = [c for c in csv_cols if c in valid.columns]
+            csv_df = valid[csv_cols].copy()
+            csv_str = csv_df.to_csv(index=False)
+            st.download_button(
+                "📥 Export OOF Predictions as CSV",
+                data=csv_str,
+                file_name="oof_predictions.csv",
+                mime="text/csv",
+            )
 
     # ── 4f. Feature Importance ─────────────────────────────────────────
     st.subheader("4f. Feature Importance (All Features)")
@@ -321,22 +343,48 @@ def render() -> None:
             if full_data is None:
                 st.warning("Full dataset not available. Re-run Build Dataset in Station 2.")
             else:
-                all_fi_cols = [c for c in full_data.columns if c not in ("Date", "Close", "y") and not c.startswith("rv_fwd")]
-                feature_names = all_fi_cols
-                y_fi = full_data["y"].values
-                scaler = RobustScaler()
-                X_scaled = scaler.fit_transform(full_data[all_fi_cols].values)
-                if best_model_name == "lgbm":
-                    X_fit = pd.DataFrame(X_scaled, columns=feature_names)
+                allowed = set(feature_column_names())
+                all_fi_cols = [c for c in full_data.columns if c in allowed]
+                if not all_fi_cols:
+                    st.warning(
+                        "No registry features found in the dataset. "
+                        "Re-run Build Dataset in Station 2."
+                    )
                 else:
-                    X_fit = X_scaled
-                model = build_model(best_model_name, best_params)
-                model.fit(X_fit, y_fi)
-                importances = _get_feature_importances(model, feature_names)
-                if importances:
-                    st.session_state["_feature_importances"] = importances
-                else:
-                    st.warning("Could not extract feature importances from this model.")
+                    feature_names = all_fi_cols
+                    fi_frame = (
+                        full_data[all_fi_cols + ["y"]]
+                        .replace([np.inf, -np.inf], np.nan)
+                        .dropna()
+                    )
+                    n_dropped = len(full_data) - len(fi_frame)
+                    if fi_frame.empty:
+                        st.warning(
+                            "No complete rows left after dropping NaN/Inf. "
+                            "Cannot compute feature importance."
+                        )
+                    else:
+                        if n_dropped:
+                            st.caption(
+                                f"Dropped {n_dropped:,} row(s) with NaN/Inf before fitting "
+                                f"({len(fi_frame):,} remaining)."
+                            )
+                        y_fi = fi_frame["y"].to_numpy()
+                        scaler = RobustScaler()
+                        X_scaled = scaler.fit_transform(fi_frame[all_fi_cols].to_numpy())
+                        if best_model_name == "lgbm":
+                            X_fit = pd.DataFrame(X_scaled, columns=feature_names)
+                        else:
+                            X_fit = X_scaled
+                        model = build_model(best_model_name, best_params)
+                        model.fit(X_fit, y_fi)
+                        importances = _get_feature_importances(model, feature_names)
+                        if importances:
+                            st.session_state["_feature_importances"] = importances
+                        else:
+                            st.warning(
+                                "Could not extract feature importances from this model."
+                            )
         except Exception as exc:
             st.error(f"Feature importance failed: {exc}")
 
@@ -368,24 +416,58 @@ def render() -> None:
             mime="text/csv",
         )
 
+    # ── SHAP ────────────────────────────────────────────────────────────
+    if oof_metrics is not None and X is not None and best_model_name:
+        try:
+            from sklearn.preprocessing import RobustScaler
+
+            scaler = RobustScaler()
+            X_scaled = scaler.fit_transform(X.to_numpy())
+            X_fit = (
+                pd.DataFrame(X_scaled, columns=X.columns)
+                if best_model_name == "lgbm"
+                else X_scaled
+            )
+            shap_model = build_model(best_model_name, best_params)
+            shap_model.fit(X_fit, y.to_numpy())
+            render_shap_section(
+                shap_model,
+                pd.DataFrame(X_scaled, columns=X.columns),
+                best_model_name,
+            )
+        except Exception as exc:
+            st.caption(f"SHAP section unavailable: {exc}")
+
     # ── 4g. LLM Diagnostic Report ─────────────────────────────────────
-    st.subheader("4g. LLM Diagnostic Report")
+    st.subheader("4g. AI Analysis & Diagnostic Report")
+    analyze_ctx = {
+        "model_name": best_model_name,
+        "best_params": best_params,
+        "oof_metrics": oof_metrics or {},
+        "feature_importances": st.session_state.get("_feature_importances") or {},
+    }
+    render_analyze_button(analyze_ctx, key="station4_ai")
+
     if st.button("Generate LLM Report", type="primary"):
         fi_dict = st.session_state.get("_feature_importances", {})
         metrics_dict = oof_metrics or {}
-        try:
-            report = generate_llm_brief(
-                best_model_name,
-                best_params,
-                fi_dict,
-                metrics_dict,
-            )
-            st.session_state["_llm_report"] = report
-        except Exception as exc:
-            st.warning(f"LLM report failed ({exc}), showing rule-based summary.")
-            st.session_state["_llm_report"] = _build_rule_based_report(
-                best_model_name, best_params, fi_dict, metrics_dict
-            )
+        with st.spinner("Calling LLM…"):
+            try:
+                api_key, llm_model = get_active_llm_creds()
+                report = generate_llm_brief(
+                    best_model_name,
+                    best_params,
+                    fi_dict,
+                    metrics_dict,
+                    api_key=api_key,
+                    llm_model=llm_model,
+                )
+                st.session_state["_llm_report"] = report
+            except Exception as exc:
+                st.warning(f"LLM report failed ({exc}), showing rule-based summary.")
+                st.session_state["_llm_report"] = _build_rule_based_report(
+                    best_model_name, best_params, fi_dict, metrics_dict
+                )
 
     report = st.session_state.get("_llm_report")
     if report is not None:
