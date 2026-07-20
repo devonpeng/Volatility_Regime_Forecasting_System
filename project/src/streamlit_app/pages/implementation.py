@@ -137,7 +137,12 @@ def render() -> None:
         (r for r in model_results if r.name == best_model_name), None
     )
 
-    if st.session_state.get("_model_results_restored"):
+    if st.session_state.get("_model_bundles"):
+        st.caption(
+            "Fitted model weights loaded from workspace import. "
+            "Optuna trial history is unavailable until you retrain."
+        )
+    elif st.session_state.get("_model_results_restored"):
         st.info(
             "Model results restored from workspace. "
             "Optuna trial history is unavailable until you retrain."

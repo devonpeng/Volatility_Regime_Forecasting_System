@@ -331,7 +331,7 @@ def is_parquet_workspace() -> bool:
 
 
 def build_workspace_config_snapshot() -> dict[str, Any]:
-    """Serialize session config (no DataFrames) for SQLite."""
+    """Serialize session config (no DataFrames) for SQLite / export JSON."""
     model_results = st.session_state.get(SS_MODEL_RESULTS)
     model_summaries = []
     if model_results:
@@ -344,6 +344,7 @@ def build_workspace_config_snapshot() -> dict[str, Any]:
                 }
             )
     oof = st.session_state.get(SS_OOF_METRICS) or {}
+    llm_report = st.session_state.get("_llm_report")
     return {
         "symbol": st.session_state.get(SS_SYMBOL, "SPY"),
         "horizon": int(st.session_state.get(SS_HORIZON, 5)),
@@ -371,4 +372,10 @@ def build_workspace_config_snapshot() -> dict[str, Any]:
         "n_trials": st.session_state.get(SS_N_TRIALS, 30),
         "train_ratio": st.session_state.get(SS_TRAIN_RATIO, 0.8),
         "experiments": list(st.session_state.get(SS_CUSTOM_EXPERIMENTS) or []),
+        "compared_experiments": list(
+            st.session_state.get(SS_COMPARED_EXPERIMENTS) or []
+        ),
+        "chat_history": list(st.session_state.get(SS_CHAT_HISTORY) or []),
+        "_llm_report": llm_report,
+        "model_artifacts": list(st.session_state.get("_model_artifact_meta") or []),
     }

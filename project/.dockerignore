@@ -1,0 +1,27 @@
+# VCS / local env
+.git
+.gitignore
+.env
+.venv
+venv
+.python-version
+
+# Python junk
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+*.egg-info
+
+# Ephemeral SQLite — recreate inside container
+data/workspaces.db
+data/*.db
+
+# Bake grid experiment runs for Station 5 Deep-dive; skip local custom runs
+cache/precomputed/runs/custom_*/
+
+# Optional local mirrors / caches
+data/precomputed/
+cache/optuna/
+cache/runs/

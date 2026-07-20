@@ -2,16 +2,24 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import re
+import shutil
+import zipfile
+from pathlib import Path
 from typing import Any
 
+import joblib
 import pandas as pd
 import streamlit as st
 
 from project.src.streamlit_app import db
 from project.src.streamlit_app.precomputed import (
+    PROJECT_ROOT,
     cached_load_precomputed,
+    relative_run_dir,
+    run_dir_for_experiment,
     slice_by_dates,
 )
 from project.src.streamlit_app.session_manager import (
@@ -21,6 +29,8 @@ from project.src.streamlit_app.session_manager import (
     GS_SYMBOL,
     SS_BEST_MODEL_NAME,
     SS_BEST_PARAMS,
+    SS_CHAT_HISTORY,
+    SS_COMPARED_EXPERIMENTS,
     SS_CUSTOM_EXPERIMENTS,
     SS_CV,
     SS_CV_GAP,
@@ -64,7 +74,9 @@ from project.src.streamlit_app.session_manager import (
 )
 
 WORKSPACE_EXPORT_FORMAT = "rv_lab_workspace"
-WORKSPACE_EXPORT_VERSION = 1
+WORKSPACE_EXPORT_VERSION = 2
+SS_MODEL_BUNDLES = "_model_bundles"
+IMPORTS_ROOT = PROJECT_ROOT / "cache" / "workspace_imports"
 
 
 def export_workspace_envelope() -> dict[str, Any]:
@@ -80,51 +92,260 @@ def export_workspace_envelope() -> dict[str, Any]:
     }
 
 
-def export_workspace_json_bytes() -> tuple[bytes, str]:
-    """Return (json_bytes, suggested_filename) for download."""
+def _safe_workspace_filename(name: str) -> str:
+    safe = re.sub(r"[^\w\-]+", "_", name).strip("_") or "workspace"
+    return f"workspace_{safe}.zip"
+
+
+def _resolve_experiment_run_path(exp: dict[str, Any]) -> Path | None:
+    """Return a local run directory for a custom experiment if it exists."""
+    run_raw = exp.get("run_dir")
+    if run_raw:
+        path = Path(str(run_raw))
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if path.is_dir():
+            return path
+    eid = exp.get("experiment_id")
+    if eid:
+        path = run_dir_for_experiment(str(eid))
+        if path.is_dir():
+            return path
+    return None
+
+
+def export_workspace_zip_bytes() -> tuple[bytes, str]:
+    """Return (zip_bytes, suggested_filename) with config + fitted models + runs."""
+    from project.src.models.fit import fit_best_model
+
     envelope = export_workspace_envelope()
+    cfg = dict(envelope["config"] or {})
+    model_artifacts: list[dict[str, str]] = []
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        results = st.session_state.get(SS_MODEL_RESULTS) or []
+        existing_bundles = st.session_state.get(SS_MODEL_BUNDLES) or {}
+        X_train = st.session_state.get(SS_X_TRAIN)
+        y_train = st.session_state.get(SS_Y_TRAIN)
+        if results:
+            for result in results:
+                name = str(getattr(result, "name", "") or "")
+                if not name:
+                    continue
+                bundle = existing_bundles.get(name)
+                if bundle is None and X_train is not None and y_train is not None:
+                    try:
+                        model, scaler, _, feature_names = fit_best_model(
+                            name,
+                            dict(getattr(result, "best_params", {}) or {}),
+                            X_train,
+                            y_train,
+                        )
+                        bundle = {
+                            "model": model,
+                            "scaler": scaler,
+                            "feature_names": feature_names,
+                            "model_name": name,
+                        }
+                    except Exception:
+                        continue
+                if bundle is None:
+                    continue
+                try:
+                    blob = io.BytesIO()
+                    joblib.dump(bundle, blob)
+                    rel = f"models/{name}.joblib"
+                    zf.writestr(rel, blob.getvalue())
+                    model_artifacts.append({"name": name, "path": rel})
+                except Exception:
+                    continue
+
+        cfg["model_artifacts"] = model_artifacts
+
+        experiments = list(cfg.get("experiments") or [])
+        for exp in experiments:
+            path = _resolve_experiment_run_path(exp)
+            if path is None:
+                continue
+            for file_path in path.rglob("*"):
+                if file_path.is_file():
+                    arc = f"runs/{path.name}/{file_path.relative_to(path).as_posix()}"
+                    zf.write(file_path, arcname=arc)
+
+        envelope["config"] = cfg
+        zf.writestr(
+            "workspace.json",
+            json.dumps(envelope, indent=2, default=str),
+        )
+
     raw_name = str(envelope.get("name") or "workspace")
-    safe = re.sub(r"[^\w\-]+", "_", raw_name).strip("_") or "workspace"
-    filename = f"workspace_{safe}.json"
-    payload = json.dumps(envelope, indent=2, default=str).encode("utf-8")
-    return payload, filename
+    return buf.getvalue(), _safe_workspace_filename(raw_name)
 
 
 def parse_workspace_import(raw: bytes | str) -> dict[str, Any]:
-    """Validate an uploaded workspace JSON and return ``{name, config}``."""
-    if isinstance(raw, bytes):
-        text = raw.decode("utf-8")
-    else:
-        text = raw
-    data = json.loads(text)
+    """Validate an uploaded workspace **zip** and return ``{name, config, zip_bytes}``.
+
+    Plain JSON exports are no longer accepted.
+    """
+    if isinstance(raw, str):
+        raise ValueError(
+            "Only workspace zip exports are supported. "
+            "Re-export from the lab as a .zip file."
+        )
+    if not raw.startswith(b"PK"):
+        raise ValueError(
+            "Only workspace zip exports are supported (not JSON). "
+            "Re-export from the lab as a .zip file."
+        )
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        names = zf.namelist()
+        if "workspace.json" not in names:
+            raise ValueError("Workspace zip missing workspace.json.")
+        data = json.loads(zf.read("workspace.json").decode("utf-8"))
     if not isinstance(data, dict):
-        raise ValueError("Workspace file must be a JSON object.")
+        raise ValueError("workspace.json must be a JSON object.")
     if data.get("format") != WORKSPACE_EXPORT_FORMAT:
         raise ValueError(
             f"Unsupported format (expected {WORKSPACE_EXPORT_FORMAT!r})."
+        )
+    version = int(data.get("version") or 0)
+    if version < WORKSPACE_EXPORT_VERSION:
+        raise ValueError(
+            f"Unsupported export version {version} "
+            f"(expected {WORKSPACE_EXPORT_VERSION}). Re-export as zip."
         )
     cfg = data.get("config")
     if not isinstance(cfg, dict):
         raise ValueError("Workspace file missing a config object.")
     name = str(data.get("name") or "Imported").strip() or "Imported"
-    return {"name": name, "config": cfg}
+    return {"name": name, "config": cfg, "zip_bytes": raw}
 
 
-def import_workspace_as_new(user_id: str, name: str, config: dict[str, Any]) -> str:
+def materialize_import_artifacts(
+    workspace_id: str,
+    zip_bytes: bytes,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract models/runs from zip into ``cache/workspace_imports/<id>/``.
+
+    Rewrites ``experiments[].run_dir`` and ``model_artifacts`` to local paths.
+    Returns the updated config dict.
+    """
+    cfg = dict(config)
+    dest_root = IMPORTS_ROOT / str(workspace_id)
+    if dest_root.exists():
+        shutil.rmtree(dest_root)
+    models_dir = dest_root / "models"
+    runs_dir = dest_root / "runs"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    model_artifacts: list[dict[str, str]] = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            if name.endswith("/") or name == "workspace.json":
+                continue
+            if name.startswith("models/") and name.endswith(".joblib"):
+                target = models_dir / Path(name).name
+                target.write_bytes(zf.read(info))
+                model_name = target.stem
+                model_artifacts.append(
+                    {
+                        "name": model_name,
+                        "path": relative_run_dir(target),
+                    }
+                )
+            elif name.startswith("runs/"):
+                # runs/<exp_id>/...
+                rel = name[len("runs/") :]
+                if not rel or ".." in Path(rel).parts:
+                    continue
+                target = runs_dir / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(info))
+
+    cfg["model_artifacts"] = model_artifacts
+
+    experiments = list(cfg.get("experiments") or [])
+    rewritten: list[dict[str, Any]] = []
+    for exp in experiments:
+        exp = dict(exp)
+        eid = str(exp.get("experiment_id") or "")
+        local = None
+        if eid:
+            candidate = runs_dir / eid
+            if candidate.is_dir():
+                local = candidate
+        if local is None:
+            # Fall back: single child matching old basename
+            run_raw = exp.get("run_dir")
+            if run_raw:
+                base = Path(str(run_raw)).name
+                candidate = runs_dir / base
+                if candidate.is_dir():
+                    local = candidate
+        if local is not None:
+            exp["run_dir"] = relative_run_dir(local)
+        rewritten.append(exp)
+    cfg["experiments"] = rewritten
+    return cfg
+
+
+def _load_model_bundles_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Load joblib bundles referenced by ``model_artifacts`` into a name→bundle map."""
+    bundles: dict[str, Any] = {}
+    for item in cfg.get("model_artifacts") or []:
+        name = str(item.get("name") or "")
+        raw_path = item.get("path")
+        if not name or not raw_path:
+            continue
+        path = Path(str(raw_path))
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if not path.is_file():
+            continue
+        try:
+            bundles[name] = joblib.load(path)
+        except Exception:
+            continue
+    return bundles
+
+
+def import_workspace_as_new(
+    user_id: str,
+    name: str,
+    config: dict[str, Any],
+    *,
+    zip_bytes: bytes | None = None,
+) -> str:
     """Create a new workspace from import and restore it. Returns workspace id."""
     ws = db.create_workspace(user_id, name, config)
+    final_cfg = config
+    if zip_bytes:
+        final_cfg = materialize_import_artifacts(ws["id"], zip_bytes, config)
+        version = db.checkpoint_workspace(ws["id"], final_cfg, bump_version=True)
+        st.session_state[SS_WS_VERSION] = version
     restore_workspace(ws["id"])
     return ws["id"]
 
 
-def import_workspace_overwrite_current(config: dict[str, Any]) -> str:
+def import_workspace_overwrite_current(
+    config: dict[str, Any],
+    *,
+    zip_bytes: bytes | None = None,
+) -> str:
     """Overwrite the active workspace config and restore. Returns workspace id."""
     ws_id = st.session_state.get(SS_WORKSPACE_ID)
     if not ws_id:
         raise ValueError("No active workspace to overwrite.")
-    version = db.checkpoint_workspace(ws_id, config, bump_version=True)
+    final_cfg = config
+    if zip_bytes:
+        final_cfg = materialize_import_artifacts(str(ws_id), zip_bytes, config)
+    version = db.checkpoint_workspace(ws_id, final_cfg, bump_version=True)
     st.session_state[SS_WS_VERSION] = version
-    st.session_state[SS_WORKSPACE_CONFIG] = config
+    st.session_state[SS_WORKSPACE_CONFIG] = final_cfg
     restore_workspace(ws_id)
     return ws_id
 
@@ -437,7 +658,16 @@ def rehydrate_from_workspace_config(
                 )
             if results:
                 st.session_state[SS_MODEL_RESULTS] = results
-                st.session_state["_model_results_restored"] = True
+                bundles = _load_model_bundles_from_config(cfg)
+                if bundles:
+                    st.session_state[SS_MODEL_BUNDLES] = bundles
+                    st.session_state["_model_results_restored"] = False
+                    st.session_state["_model_artifact_meta"] = list(
+                        cfg.get("model_artifacts") or []
+                    )
+                else:
+                    st.session_state[SS_MODEL_BUNDLES] = {}
+                    st.session_state["_model_results_restored"] = True
                 if not st.session_state.get(SS_BEST_MODEL_NAME):
                     best = max(results, key=lambda r: r.best_auc)
                     st.session_state[SS_BEST_MODEL_NAME] = best.name
@@ -541,6 +771,9 @@ def _clear_pipeline_frames() -> None:
         "_feature_importances",
         "_shap_bundle",
         "_llm_report",
+        SS_MODEL_BUNDLES,
+        "_model_artifact_meta",
+        "_model_results_restored",
     ):
         st.session_state[key] = None if key != SS_MODEL_RESULTS else None
 
@@ -558,6 +791,14 @@ def restore_workspace(workspace_id: str) -> None:
     st.session_state[SS_WS_VERSION] = int(ws.get("version", 0))
     st.session_state[SS_WORKSPACE_CONFIG] = cfg
     st.session_state[SS_CUSTOM_EXPERIMENTS] = list(cfg.get("experiments") or [])
+    st.session_state[SS_COMPARED_EXPERIMENTS] = list(
+        cfg.get("compared_experiments") or []
+    )
+    st.session_state[SS_CHAT_HISTORY] = list(cfg.get("chat_history") or [])
+    if cfg.get("_llm_report") is not None:
+        st.session_state["_llm_report"] = cfg["_llm_report"]
+    else:
+        st.session_state["_llm_report"] = None
 
     welcome_done = bool(cfg.get("welcome_done"))
     symbol = cfg.get("symbol", "SPY")

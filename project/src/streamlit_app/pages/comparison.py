@@ -130,12 +130,12 @@ def _render_deep_dive(
         use_container_width=True,
         key=f"dd_cm_{key_suffix}",
     )
-    st.caption(CAPTION_CM)
-    st.plotly_chart(
-        fig_macro_regime_timeline(report, split),
-        use_container_width=True,
-        key=f"dd_regime_{key_suffix}",
-    )
+    # st.caption(CAPTION_CM)
+    # st.plotly_chart(
+    #     fig_macro_regime_timeline(report, split),
+    #     use_container_width=True,
+    #     key=f"dd_regime_{key_suffix}",
+    # )
     st.caption(CAPTION_REGIME_TIMELINE)
     st.plotly_chart(
         fig_cluster_scatter(report, split),

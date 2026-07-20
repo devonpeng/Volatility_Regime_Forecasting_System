@@ -71,24 +71,25 @@ def _json(data: Any) -> str:
 
 def _log_snapshot_to_stderr(snapshot: dict[str, Any], *, page_name_arg: str) -> None:
     """Temporary debug: dump full page snapshot JSON to the Streamlit server stderr."""
-    payload = {
-        "tool": "get_current_page_snapshot",
-        "page_name_arg": page_name_arg,
-        "thread_name": threading.current_thread().name,
-        "has_script_run_ctx": get_script_run_ctx(suppress_warning=True) is not None,
-        "n_session_keys": len(st.session_state.keys())
-        if hasattr(st.session_state, "keys")
-        else None,
-        "session_current_page": st.session_state.get("_current_page"),
-        "snapshot": snapshot,
-    }
-    text = _json(payload)
-    print(
-        f"[DEBUG get_current_page_snapshot] {text}",
-        file=sys.stderr,
-        flush=True,
-    )
-    _logger.warning("get_current_page_snapshot debug dump: %s", text)
+    # payload = {
+    #     "tool": "get_current_page_snapshot",
+    #     "page_name_arg": page_name_arg,
+    #     "thread_name": threading.current_thread().name,
+    #     "has_script_run_ctx": get_script_run_ctx(suppress_warning=True) is not None,
+    #     "n_session_keys": len(st.session_state.keys())
+    #     if hasattr(st.session_state, "keys")
+    #     else None,
+    #     "session_current_page": st.session_state.get("_current_page"),
+    #     "snapshot": snapshot,
+    # }
+    pass
+    # text = _json(payload)
+    # print(
+    #     f"[DEBUG get_current_page_snapshot] {text}",
+    #     file=sys.stderr,
+    #     flush=True,
+    # )
+    # _logger.warning("get_current_page_snapshot debug dump: %s", text)
 
 
 def _df_shape(obj: Any) -> list[int] | None:

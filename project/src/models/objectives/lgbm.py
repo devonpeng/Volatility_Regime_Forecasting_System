@@ -78,7 +78,7 @@ def objective_lgbm_classifier(
         X_train_df = pd.DataFrame(X[train_idx], columns=cols)
         X_val_df = pd.DataFrame(X[val_idx], columns=cols)
         y_train, y_val = y_clf[train_idx], y_clf[val_idx]
-        if np.unique(y_train).size < 2:
+        if np.unique(y_train).size < 2 or np.unique(y_val).size < 2:
             continue
 
         if feature_selection is not None:
@@ -112,8 +112,6 @@ def objective_lgbm_classifier(
         )
 
         y_pred_proba = gbm.predict(X_val_scaled)
-        if np.unique(y_val).size < 2:
-            continue
 
         fold_auc = roc_auc_score(y_val, y_pred_proba)
         if not np.isfinite(fold_auc):

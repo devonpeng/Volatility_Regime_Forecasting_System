@@ -14,6 +14,7 @@ from project.src.streamlit_app.ai_tutor import render_ai_rail
 from project.src.streamlit_app.auth import ensure_authenticated, render_workspace_sidebar
 from project.src.streamlit_app.global_settings import render_global_settings_sidebar
 from project.src.streamlit_app.session_manager import (
+    PAGE_ORDER,
     SS_AI_RAIL_COLLAPSED,
     has_data_loaded,
     has_features_built,
@@ -52,10 +53,59 @@ PAGES = {
     "Station 4: Implementation": "implementation",
     "Station 5: Comparison": "comparison",
 }
+PAGE_LABELS = list(PAGES.keys())
+PAGE_ID_TO_LABEL = {pid: label for label, pid in PAGES.items()}
+STATION_NAV_KEY = "station_nav"
+STATION_NAV_PENDING = "_pending_station_nav"
+
+
+def _render_station_nav_footer(current_page_id: str) -> None:
+    """Bottom-left Previous / Next station buttons (endpoints disabled)."""
+    try:
+        idx = PAGE_ORDER.index(current_page_id)
+    except ValueError:
+        return
+    labels = [PAGE_ID_TO_LABEL[pid] for pid in PAGE_ORDER]
+    st.markdown("---")
+    left, _ = st.columns([1, 3])
+    with left:
+        c_prev, c_next = st.columns(2)
+        with c_prev:
+            prev_disabled = idx <= 0
+            if st.button(
+                "← Previous station",
+                key="station_prev_btn",
+                disabled=prev_disabled,
+                width="stretch",
+            ):
+                # Cannot mutate widget key after radio is instantiated — defer.
+                st.session_state[STATION_NAV_PENDING] = labels[idx - 1]
+                st.rerun()
+        with c_next:
+            next_disabled = idx >= len(PAGE_ORDER) - 1
+            if st.button(
+                "Next station →",
+                key="station_next_btn",
+                disabled=next_disabled,
+                width="stretch",
+            ):
+                st.session_state[STATION_NAV_PENDING] = labels[idx + 1]
+                st.rerun()
+
+
+# Apply deferred footer navigation *before* the radio widget is created.
+_pending_nav = st.session_state.pop(STATION_NAV_PENDING, None)
+if _pending_nav in PAGE_LABELS:
+    st.session_state[STATION_NAV_KEY] = _pending_nav
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Navigate**")
-page_label = st.sidebar.radio("Station", list(PAGES.keys()), label_visibility="collapsed")
+page_label = st.sidebar.radio(
+    "Station",
+    PAGE_LABELS,
+    label_visibility="collapsed",
+    key=STATION_NAV_KEY,
+)
 current_page = PAGES[page_label]
 
 if current_page == "comparison" and not is_parquet_workspace():
@@ -109,6 +159,8 @@ with content_col:
         from project.src.streamlit_app.pages.comparison import render
 
         render()
+
+    _render_station_nav_footer(current_page)
 
 with ai_col:
     if ai_collapsed:

@@ -101,6 +101,10 @@ def render_workspace_sidebar() -> bool:
 
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"**User:** {st.session_state.get(SS_USERNAME, '?')}")
+    if st.sidebar.button("Log out", key="sidebar_logout_btn"):
+        for key in (SS_AUTHENTICATED, SS_USER_ID, SS_USERNAME, "workspace_id"):
+            st.session_state[key] = False if key == SS_AUTHENTICATED else None
+        st.rerun()
 
     workspaces = db.list_workspaces(user_id)
     names = {w["id"]: w["name"] for w in workspaces}
@@ -154,27 +158,34 @@ def render_workspace_sidebar() -> bool:
 
     st.sidebar.markdown("**Export / Import**")
     from project.src.streamlit_app.workspace import (
-        export_workspace_json_bytes,
+        export_workspace_zip_bytes,
         import_workspace_as_new,
         import_workspace_overwrite_current,
         parse_workspace_import,
     )
 
-    try:
-        export_bytes, export_name = export_workspace_json_bytes()
+    if st.sidebar.button("Prepare export zip", key="ws_export_prepare"):
+        try:
+            st.session_state["_ws_export_zip"] = export_workspace_zip_bytes()
+            st.sidebar.success("Export ready — click Download below.")
+        except Exception as exc:
+            st.session_state.pop("_ws_export_zip", None)
+            st.sidebar.error(f"Export failed: {exc}")
+
+    packed = st.session_state.get("_ws_export_zip")
+    if packed:
+        export_bytes, export_name = packed
         st.sidebar.download_button(
-            "Export workspace JSON",
+            "Download workspace zip",
             data=export_bytes,
             file_name=export_name,
-            mime="application/json",
+            mime="application/zip",
             key="ws_export_btn",
         )
-    except Exception as exc:
-        st.sidebar.caption(f"Export unavailable: {exc}")
 
     uploaded = st.sidebar.file_uploader(
-        "Import workspace JSON",
-        type=["json"],
+        "Import workspace zip",
+        type=["zip"],
         key="ws_import_file",
     )
     import_mode = st.sidebar.radio(
@@ -188,19 +199,24 @@ def render_workspace_sidebar() -> bool:
     if uploaded is not None and st.sidebar.button("Apply import", key="ws_import_apply"):
         try:
             parsed = parse_workspace_import(uploaded.getvalue())
+            zip_bytes = parsed.get("zip_bytes")
             if import_mode == "new":
-                import_workspace_as_new(user_id, parsed["name"], parsed["config"])
+                import_workspace_as_new(
+                    user_id,
+                    parsed["name"],
+                    parsed["config"],
+                    zip_bytes=zip_bytes,
+                )
                 st.toast(f"Imported as new workspace: {parsed['name']}")
             else:
-                import_workspace_overwrite_current(parsed["config"])
+                import_workspace_overwrite_current(
+                    parsed["config"],
+                    zip_bytes=zip_bytes,
+                )
                 st.toast("Current workspace overwritten from import")
+            st.session_state.pop("_ws_export_zip", None)
             st.rerun()
         except Exception as exc:
             st.sidebar.error(f"Import failed: {exc}")
-
-    if not allow_anon() and st.sidebar.button("Log out"):
-        for key in (SS_AUTHENTICATED, SS_USER_ID, SS_USERNAME, "workspace_id"):
-            st.session_state[key] = False if key == SS_AUTHENTICATED else None
-        st.rerun()
 
     return st.session_state.get("workspace_id") is not None

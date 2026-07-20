@@ -658,6 +658,28 @@ project/
 └── .env                            # API keys (not committed)
 ```
 
+## Docker deploy
+
+Build and run from this `project/` directory. Teaching-pack Parquets
+(`cache/precomputed/*.parquet`, `grid_results.parquet`, `manifest.json`) and
+**grid experiment runs** under `cache/precomputed/runs/` (excluding `custom_*`)
+are baked into the image. SQLite (`data/workspaces.db`) is ephemeral inside
+the container (no volume).
+
+```bash
+cd project
+docker build -t rv-lab .
+docker run --rm -p 8501:8501 \
+  -e ALLOW_ANON=0 \
+  -e CLASS_INVITE_CODE=fins5557 \
+  -e LLM_API_KEY=your_key \
+  -e LLM_MODEL=gemini-2.0-flash \
+  rv-lab
+```
+
+Open http://localhost:8501. Auth is required by default (`ALLOW_ANON=0`);
+override with `-e ALLOW_ANON=1` for anonymous local demos.
+
 ## Key Design Decisions
 
 - **No modifications to existing modules** — all Streamlit logic lives in `src/streamlit_app/`
