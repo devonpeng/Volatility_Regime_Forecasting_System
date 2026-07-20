@@ -219,9 +219,9 @@ __marimo__/
 
 
 # cache 
-!project/cache/precomputed
-!project/cache/data
-project/cache
+# !project/cache/precomputed
+# !project/cache/data
+# project/cache
 # exclude project/cache/precomputed 
 
 
@@ -237,11 +237,16 @@ project/cache
 # Ignore all MacOS system files and directories
 .DS_Store
 
-# project data — ignore everything except precomputed parquet files
-project/cache/
+# ignore everything in cache
+project/cache/*
+
+# allow precomputed
 !project/cache/precomputed/
 !project/cache/precomputed/**
-!project/cache/precomputed/*
+
+# re-ignore custom files/directories
+project/cache/precomputed/custom*
+project/cache/precomputed/custom*/**
 
 # project data — ignored entirely (recreated inside container)
 project/data/
