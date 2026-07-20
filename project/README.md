@@ -8,6 +8,33 @@
 - 训练：支持 CLI 与 Python 调用
 
 ---
+# 运行
+```
+cd project && docker build -t rv-lab .
+docker run --rm -p 8501:8501 \
+  --cpus=2 \
+  --memory=2g \
+  -e ALLOW_ANON=1 \
+  -e LLM_API_KEY=AIzaSyBYdz_q_d-eiw1wHChnnzvawulXoFYOB4U \
+  -e LLM_MODEL=gemini-3.5-flash \ 
+  -e CLASS_INVITE_CODE=fins5557-ABABA \
+  rv-lab
+
+docker run --rm -p 8501:8501 \
+  --cpus=2 \
+  --memory=2g \
+  -e ALLOW_ANON=1 \
+  -e LLM_API_KEY=AIzaSyBYdz_q_d-eiw1wHChnnzvawulXoFYOB4U \
+  -e LLM_MODEL=gemini-3.5-flash \
+  -e CLASS_INVITE_CODE=fins5557-ABABA \
+  rv-lab
+
+docker stats
+docker run --rm -p 8501:8501 \
+  --cpus=2 \
+  --memory=2g \
+  ....
+```
 
 ## 1) 目录结构与职责
 
