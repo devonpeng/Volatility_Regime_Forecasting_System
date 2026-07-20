@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_COMPILE_BYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON=3.12 \
     PYTHONPATH=/app \
