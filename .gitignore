@@ -245,8 +245,8 @@ project/cache/*
 !project/cache/precomputed/**
 
 # re-ignore custom files/directories
-project/cache/precomputed/custom*
-project/cache/precomputed/custom*/**
+project/cache/precomputed/runs/custom*
+project/cache/precomputed/runs/custom*/**
 
 # project data — ignored entirely (recreated inside container)
 project/data/
