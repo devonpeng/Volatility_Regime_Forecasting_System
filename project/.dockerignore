@@ -14,14 +14,28 @@ venv
 **/.ruff_cache
 *.egg-info
 
-# Ephemeral SQLite — recreate inside container
+# Ephemeral SQLite — recreated inside container
 data/workspaces.db
-data/*.db
 
-# Bake grid experiment runs for Station 5 Deep-dive; skip local custom runs
-cache/precomputed/runs/custom_*/
+# cache/ — only precomputed is needed at build time; everything else is generated at runtime
+!cache/precomputed/SPY_*.parquet
+!cache/precomputed/QQQ_*.parquet
+!cache/precomputed/manifest.json
+!cache/precomputed/grid_results.parquet
+!cache/precomputed/runs/spy*/
+!cache/precomputed/runs/custom_20*/
+cache/
 
-# Optional local mirrors / caches
+# Optional local mirrors / caches not needed in production
 data/precomputed/
-cache/optuna/
-cache/runs/
+
+# Training output artifacts (not needed in container)
+example_runs/
+
+# Temporary scripts
+aaaaa.py
+tempCodeRunnerFile.py
+
+# IDE / editor
+.vscode/
+.idea/
