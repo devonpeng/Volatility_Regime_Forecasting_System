@@ -27,7 +27,7 @@ COPY . .
 
 RUN mkdir -p data cache/precomputed
 
-EXPOSE 8501
+EXPOSE 8080
 
 # Use the image venv directly so startup does not re-resolve Python
 CMD [".venv/bin/streamlit", "run", "streamlit-docker-test/app.py", \
