@@ -50,7 +50,9 @@ def objective_xgb_classifier(
         X_train_df = pd.DataFrame(X[train_idx], columns=cols)
         X_val_df = pd.DataFrame(X[val_idx], columns=cols)
         y_train, y_val = y_clf[train_idx], y_clf[val_idx]
-        if np.unique(y_train).size < 2:
+        # AUC is undefined for single-class folds; skip before xgb.train
+        # (eval_metric=auc on a one-class eval set floods stderr warnings).
+        if np.unique(y_train).size < 2 or np.unique(y_val).size < 2:
             continue
 
         if feature_selection is not None:
@@ -85,8 +87,6 @@ def objective_xgb_classifier(
         )
 
         y_pred_proba = bst.predict(dval)
-        if np.unique(y_val).size < 2:
-            continue
 
         fold_auc = roc_auc_score(y_val, y_pred_proba)
         if not np.isfinite(fold_auc):

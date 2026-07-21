@@ -1,0 +1,112 @@
+# SPY-only offline experiment recipe for precompute_grid.py
+symbol: SPY
+defaults:
+  label_method: expanding
+  n_trials: 15
+  early_stop_patience: 5
+  nested_feature_selection: false
+
+date_ranges:
+  full:
+    start: "2010-01-01"
+    end: "2026-03-01"
+  pre_2020:
+    start: "2010-01-01"
+    end: "2019-12-31"
+  post_2020:
+    start: "2020-01-01"
+    end: "2025-12-31"
+
+cv_profiles:
+  default:
+    n_splits: 12
+    train_window: 252
+    test_size: 21
+    gap: 5
+  wide:
+    n_splits: 8
+    train_window: 504
+    test_size: 63
+    gap: 10
+
+# Explicit experiment rows (not full cartesian)
+experiments:
+  - id: spy5_full_none_lgbm_default
+    horizon: 5
+    date_range: full
+    feature_selection: none
+    top_k: 12
+    model: lgbm
+    cv: default
+
+  - id: spy5_full_lasso12_lgbm_default
+    horizon: 5
+    date_range: full
+    feature_selection: lasso
+    top_k: 12
+    model: lgbm
+    cv: default
+
+  - id: spy5_full_tree10_xgb_default
+    horizon: 5
+    date_range: full
+    feature_selection: tree_topk
+    top_k: 10
+    model: xgb
+    cv: default
+
+  - id: spy5_full_ttest12_logistic_default
+    horizon: 5
+    date_range: full
+    feature_selection: ttest
+    top_k: 12
+    model: logistic
+    cv: default
+
+  - id: spy5_pre_lasso12_lgbm_default
+    horizon: 5
+    date_range: pre_2020
+    feature_selection: lasso
+    top_k: 12
+    model: lgbm
+    cv: default
+
+  - id: spy5_post_lasso12_lgbm_default
+    horizon: 5
+    date_range: post_2020
+    feature_selection: lasso
+    top_k: 12
+    model: lgbm
+    cv: default
+
+  - id: spy10_full_lasso12_lgbm_default
+    horizon: 10
+    date_range: full
+    feature_selection: lasso
+    top_k: 12
+    model: lgbm
+    cv: default
+
+  - id: spy5_full_lasso20_lgbm_wide
+    horizon: 5
+    date_range: full
+    feature_selection: lasso
+    top_k: 20
+    model: lgbm
+    cv: wide
+
+  - id: spy5_full_tree5_lgbm_default
+    horizon: 5
+    date_range: full
+    feature_selection: tree_topk
+    top_k: 5
+    model: lgbm
+    cv: default
+
+  - id: spy10_post_tree12_xgb_default
+    horizon: 10
+    date_range: post_2020
+    feature_selection: tree_topk
+    top_k: 12
+    model: xgb
+    cv: default

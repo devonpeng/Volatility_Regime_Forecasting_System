@@ -1,0 +1,57 @@
+# Quick Browse table presentation for Station 5
+default_sort:
+  column: auc
+  ascending: false
+
+filters:
+  - field: symbol
+    label: Symbol
+    default: SPY
+  - field: horizon
+    label: Horizon
+    default: all
+  - field: feature_selection
+    label: Selection
+    default: all
+  - field: model
+    label: Model
+    default: all
+  - field: date_range
+    label: Date Range
+    default: all
+  - field: top_k
+    label: Top-K
+    default: all
+
+columns:
+  - field: experiment_id
+    label: "#"
+  - field: symbol
+    label: sym
+  - field: horizon
+    label: hrz
+  - field: date_range
+    label: dates
+  - field: feature_selection
+    label: sel
+  - field: top_k
+    label: top_k
+  - field: model
+    label: model
+  - field: cv_profile
+    label: cv
+  - field: auc
+    label: AUC
+  - field: brier
+    label: Brier
+  - field: log_loss
+    label: LogLoss
+  - field: source
+    label: src
+
+max_compare: 5
+bubble_chart: true
+radar_metrics:
+  - auc
+  - brier
+  - log_loss
