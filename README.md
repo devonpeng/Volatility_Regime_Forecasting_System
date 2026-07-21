@@ -1229,3 +1229,354 @@ Possible future extensions include:
 This project provides a complete, reproducible, and visually interpretable machine learning pipeline for realized volatility classification.
 
 It covers the full workflow from data loading and feature construction to model training, evaluation, regime analysis, and reporting. The modular design makes it easy to extend, while the saved artifacts and visual outputs make the results easy to audit, reproduce, and present.
+
+---
+
+## 29. Streamlit RV Prediction Lab
+
+The Streamlit application in `project/src/streamlit_app/` provides an interactive
+five-station workbench over the training pipeline. Its entry point is
+`project/app.py`.
+
+### 29.1 Run the Application
+
+All commands in this section assume that the current directory is `project/`:
+
+```bash
+cd project
+uv sync
+cp .env.example .env
+uv run streamlit run app.py
+```
+
+Open the URL printed by Streamlit, normally `http://localhost:8501`.
+
+The supported Python range is `>=3.11,<3.13`. Dependencies are declared in
+`pyproject.toml` and locked in `uv.lock`.
+
+### 29.2 Environment Configuration
+
+Configure the application through `project/.env`:
+
+```dotenv
+CACHE_PATH=
+LLM_API_KEY=
+LLM_MODEL=gemini-3.5-flash
+CLASS_INVITE_CODE=
+ALLOW_ANON=
+```
+
+- `CACHE_PATH`: optional cache location used by the project. Leave it empty to
+  use the project defaults.
+- `LLM_API_KEY`: Google Gemini API key for the AI tutor and LLM-assisted
+  reports.
+- `LLM_MODEL`: Gemini model name. The example configuration uses
+  `gemini-3.5-flash`.
+- `CLASS_INVITE_CODE`: invite code required for new user registration when
+  anonymous access is disabled. Registration is unavailable if this value is
+  empty.
+- `ALLOW_ANON`: set to `1`, `true`, or `yes` for a local anonymous user. Set
+  it to `0` to require registration and login. The application defaults to
+  anonymous access when this variable is omitted.
+
+For the AI tutor, an API key supplied in the current session takes precedence
+over a key saved for the user, which in turn takes precedence over
+`LLM_API_KEY` from the environment.
+
+### 29.3 Application Workflow
+
+The sidebar controls the active workspace, global symbol and horizon, station
+navigation, and pipeline status. The stations must generally be completed in
+order because changing an upstream setting invalidates dependent downstream
+results.
+
+1. **Station 1: ETL**
+   - Loads a precomputed SPY or QQQ teaching pack for a 5-day or 10-day horizon.
+   - Allows a date slice to be selected before loading.
+   - Can alternatively download live data through `yfinance` or use synthetic
+     fallback data.
+   - Live-data workspaces cannot use Station 5.
+2. **Station 2: Feature Engineering**
+   - Selects registered features.
+   - Builds the feature matrix, metadata, forward-RV target, and either
+     `expanding` or rolling `median` labels.
+3. **Station 3: Model Design**
+   - Creates a time-ordered train/test split.
+   - Configures purged time-series cross-validation, including split count,
+     training window, test size, and gap.
+   - Tunes Logistic Regression, XGBoost, and LightGBM with Optuna.
+4. **Station 4: Implementation**
+   - Compares trained models and displays out-of-fold and holdout evaluation.
+   - Provides ROC, feature-importance, SHAP, and optional LLM-assisted analysis.
+   - Exports OOF predictions and feature importance as CSV files.
+5. **Station 5: Comparison**
+   - Browses and filters the offline experiment grid.
+   - Compares experiments with bubble and radar views.
+   - Opens complete run artifacts for detailed inspection.
+   - Can run and persist custom experiments under
+     `cache/precomputed/runs/custom_*`.
+
+The presentation of Station 5 is configured by
+`configs/comparison_view.yaml`. Its offline experiments, date ranges,
+cross-validation profiles, models, and tuning settings are defined in
+`configs/grid_recipe.yaml`.
+
+### 29.4 Teaching Packs and Precomputed Artifacts
+
+The precomputed data contract is:
+
+```text
+project/cache/precomputed/
+├── SPY_5d.parquet
+├── SPY_10d.parquet
+├── QQQ_5d.parquet
+├── QQQ_10d.parquet
+├── manifest.json
+├── grid_results.parquet
+└── runs/
+    └── <experiment_id>/
+```
+
+The four teaching packs contain the full enriched timeline and both supported
+label variants. `manifest.json` records their symbols, horizons, dimensions,
+date ranges, and paths. `grid_results.parquet` is the Station 5 experiment
+index.
+
+A run is considered complete for detailed loading when it contains at least:
+
+```text
+data/y.csv
+data/oof_predictions.csv
+config/pipeline.json
+```
+
+Generate teaching packs before generating the experiment grid, because the
+grid reads the teaching-pack Parquet files:
+
+```text
+precompute_data.py
+        ↓
+precompute_grid.py
+        ↓
+Streamlit Station 5
+```
+
+### 29.5 Authentication and Workspaces
+
+The application stores users, workspaces, and experiments in
+`project/data/workspaces.db`.
+
+- With `ALLOW_ANON=1`, the application uses a local anonymous account.
+- With `ALLOW_ANON=0`, users must register with `CLASS_INVITE_CODE` and log in.
+- A workspace must be created or selected before using the stations.
+- Workspace checkpoints preserve the applied configuration and support
+  restoration after a rerun.
+- The sidebar can save, rename, export, and import workspaces.
+- Workspace exports are ZIP files containing `workspace.json` and, when
+  available, fitted model and custom-run artifacts.
+- An imported ZIP can create a new workspace or overwrite the current one.
+- Plain JSON workspace imports are not supported.
+
+The SQLite database is application state, not a substitute for the
+`cache/precomputed/` teaching packs and experiment artifacts.
+
+### 29.6 AI Tutor
+
+The right-hand AI rail is a LangGraph ReAct tutor backed by Google Gemini. It
+can inspect the current station, available features, model registry, and
+workspace state. Actions that would alter settings are returned as proposals;
+the user must explicitly apply them in the interface. This prevents an AI
+response from silently changing the active experiment.
+
+### 29.7 Docker
+
+Build the image from `project/`:
+
+```bash
+cd project
+docker build -t rv-lab .
+docker run --rm -p 8080:8080 \
+  -e PORT=8080 \
+  -e CLASS_INVITE_CODE=replace-me \
+  -e LLM_API_KEY=replace-me \
+  rv-lab
+```
+
+The Docker image uses Python 3.12, installs the locked production
+dependencies, includes the precomputed artifacts present at build time, and
+sets `ALLOW_ANON=0`. The container therefore requires a class invite code for
+new registrations unless that environment setting is overridden.
+
+---
+
+## 30. Utility Scripts
+
+`project/scripts/` contains three operational utilities. Run them from
+`project/` with `uv`. These commands write or replace data, model artifacts, or
+workspace state; review the paths and options before running them.
+
+### 30.1 `precompute_data.py`
+
+Builds wide teaching-pack Parquet files and `manifest.json`. It downloads or
+generates raw data, applies every registered feature without feature
+selection, computes the forward realized-volatility target, and adds both
+`y_expanding` and `y_median` labels.
+
+Default command:
+
+```bash
+uv run python scripts/precompute_data.py
+```
+
+Default behavior:
+
+- Symbols: `SPY QQQ`
+- Horizons: `5 10`
+- Start: `2005-01-01`
+- End: `2026-03-01`
+- Output: `cache/precomputed/<SYMBOL>_<HORIZON>d.parquet`
+- Manifest: `cache/precomputed/manifest.json`
+
+Options:
+
+```text
+--start DATE             Inclusive data start date
+--end DATE               Data end date passed to the loader
+--symbols SYMBOL [...]   One or more ticker symbols
+--horizons DAYS [...]    One or more integer forecast horizons
+--synthetic              Force synthetic data instead of market downloads
+```
+
+Examples:
+
+```bash
+# Build only the standard SPY packs for a shorter period
+uv run python scripts/precompute_data.py \
+  --start 2010-01-01 \
+  --end 2025-12-31 \
+  --symbols SPY \
+  --horizons 5 10
+
+# Build deterministic fallback packs without downloading market data
+uv run python scripts/precompute_data.py --synthetic
+```
+
+The script overwrites matching Parquet files and rewrites the manifest to
+describe only the files produced by that invocation.
+
+### 30.2 `precompute_grid.py`
+
+Runs the offline experiment recipe through `RVPipeline`, persists each
+experiment's artifacts, and writes the index consumed by Station 5.
+
+Prerequisite:
+
+```bash
+uv run python scripts/precompute_data.py
+```
+
+Run the full configured grid:
+
+```bash
+uv run python scripts/precompute_grid.py
+```
+
+Run only the first two experiments as a limited check:
+
+```bash
+uv run python scripts/precompute_grid.py --limit 2
+```
+
+Use another recipe:
+
+```bash
+uv run python scripts/precompute_grid.py \
+  --recipe configs/grid_recipe.yaml
+```
+
+Options:
+
+```text
+--recipe PATH    YAML recipe path; defaults to configs/grid_recipe.yaml
+--limit N        Run only the first N experiments; 0 means all experiments
+```
+
+For each experiment, the script reads the requested teaching pack, slices its
+date range, constructs `X`, `y`, and metadata, tunes the configured model, and
+writes artifacts to:
+
+```text
+cache/precomputed/runs/<experiment_id>/
+```
+
+It then writes one summary row per experiment to:
+
+```text
+cache/precomputed/grid_results.parquet
+```
+
+Failed experiments are retained in the index with an `error` value and
+`NaN` metrics so that one failure does not stop the remaining grid. Re-running
+an experiment removes and replaces that experiment's existing run directory.
+The final `grid_results.parquet` is replaced with results from the current
+invocation, so using `--limit` produces a limited index.
+
+### 30.3 `migrate_precomputed.py`
+
+Moves precomputed artifacts and the Streamlit SQLite database between
+environments as one portable `.tar.gz` bundle.
+
+The archive layout is:
+
+```text
+precomputed/
+workspaces.db
+```
+
+#### Pack
+
+```bash
+uv run python scripts/migrate_precomputed.py pack \
+  --source cache/precomputed \
+  --db data/workspaces.db \
+  --archive /tmp/precomputed_bundle.tar.gz
+```
+
+Pack options:
+
+```text
+--source PATH     Existing precomputed directory
+--db PATH         Existing workspaces.db file
+--archive PATH    Output .tar.gz file
+--force           Overwrite an existing archive
+```
+
+#### Unpack
+
+```bash
+uv run python scripts/migrate_precomputed.py unpack \
+  --archive /tmp/precomputed_bundle.tar.gz \
+  --dest cache/precomputed \
+  --db data/workspaces.db
+```
+
+Unpack options:
+
+```text
+--archive PATH    Existing input .tar.gz file
+--dest PATH       Destination precomputed directory
+--db PATH         Destination workspaces.db path
+--force           Replace an existing non-empty destination and database
+```
+
+During unpacking, the utility validates the archive structure and rewrites the
+legacy prefix `data/precomputed` to `cache/precomputed` in:
+
+- `manifest.json`;
+- the `run_dir` column of `grid_results.parquet`; and
+- JSON stored in the `workspaces` and `experiments` database tables.
+
+Without `--force`, packing refuses to overwrite an archive and unpacking
+refuses to replace an existing destination or database. With `--force`,
+unpacking removes the destination tree and overwrites the database. Back up
+both locations before using that option.
