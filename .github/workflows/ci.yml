@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main, app]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve / install deps (conflict check)
+        run: uv sync --frozen
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run pytest tests/ -q
