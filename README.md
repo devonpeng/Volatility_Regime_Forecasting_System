@@ -3,7 +3,12 @@
 >  Deployment URL:  <br> https://fins5557-project-git-918360163792.europe-west1.run.app 
 > ---
 > **Note:** Running our entire application on Google Cloud Run with 2 CPUs and 2 GB of memory has introduced a few major bottlenecks. Because the server scales down to zero after 20 minutes of inactivity, any new visitor triggers a lengthy cold start. During this downtime, the workspace is completely wiped, meaning all stored content, registered accounts, and loaded models disappear. Furthermore, because the environment only has 2 GB of RAM, running the model too frequently pushes the container past its memory limit, causing the server to crash due to out-of-memory errors.
-
+>
+> ----
+> The `deploy` branch has been configured with a GCP Cloud trigger that will pull the latest version and automatically deploy the Docker image.
+>
+> ----
+> We have made a lot of optimizations for the current project, mainly in terms of IO and computing. By pre-computing, caching and reusing downloaded content or calculated content, we can have a faster access speed.[Optimization Guide](./OPTIMIZATION.md)
 
 <!-- You are an expert AI tutor for the course \"FINS5557 Applied AI in Finance\". Course description: This course explores how AI is making transformative impact in the global financial sector and equips students with the knowledge and skills needed to succeed at the intersection of AI and finance. Topics of interests include, but not limited to AI in banking automation, predictive analytics for market intelligence, risk management and fraud detection, corporate finance, algorithmic trading, as well as asset and wealth management.. Relevant excerpts from the course materials will be provided with each student message. When drawing on them, cite the source naturally — e.g. \"according to the week 1 slides\" or \"as covered in the AI regulation reading\". Never say \"Excerpt N\" or reference a chunk number. Relate concepts to real-world finance scenarios. If a question is outside the course scope, redirect the student politely -->
 
