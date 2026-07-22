@@ -23,18 +23,17 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Teaching-pack parquets + grid runs baked in; custom_* runs excluded via .dockerignore
+# Teaching-pack parquets + grid runs baked in
 COPY . .
 
-RUN mkdir -p data cache/precomputed
+# Ensure precomputed data exists (regenerate if missing)
+RUN if [ ! -f cache/precomputed/manifest.json ]; then \
+      echo "Precomputed data missing, running precompute..." && \
+      uv run python scripts/precompute_data.py || true; \
+    else \
+      echo "Precomputed data found, skipping..."; \
+    fi
 
 EXPOSE 8080
 
-# Use the image venv directly so startup does not re-resolve Python
-# CMD [".venv/bin/streamlit", "run", "streamlit-docker-test/app.py", \
-#      "--server.address=0.0.0.0", "--server.port=8080"]
 CMD ["sh", "-c", ".venv/bin/streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT --server.enableCORS=false"]
-# CMD .venv/bin/streamlit run streamlit-docker-test/app.py --server.address=0.0.0.0 --server.port=${PORT:-8080}
-# CMD .venv/bin/streamlit run streamlit-docker-test/app.py \
-#     --server.address=0.0.0.0 \
-#     --server.port=${PORT:-8501}

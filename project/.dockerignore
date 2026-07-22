@@ -17,14 +17,8 @@ venv
 # Ephemeral SQLite — recreated inside container
 data/workspaces.db
 
-# cache/ — only precomputed is needed at build time; everything else is generated at runtime
-!cache/precomputed/SPY_*.parquet
-!cache/precomputed/QQQ_*.parquet
-!cache/precomputed/manifest.json
-!cache/precomputed/grid_results.parquet
-!cache/precomputed/runs/spy*/
-!cache/precomputed/runs/custom_20*/
-cache/
+# Precomputed data — fully include for production deployment
+cache/precomputed/
 
 # Optional local mirrors / caches not needed in production
 data/precomputed/

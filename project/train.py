@@ -32,7 +32,7 @@ def main(args: argparse.Namespace):
         gap_size=args.gap_size,
         output_dir=args.output_dir,
         force_rebuild_features=args.force_rebuild_features,
-        early_stop_patience=args.early_stopping,
+        early_stop_patience=args.early_stop,
     )
 
     result = pipeline.run()
