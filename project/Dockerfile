@@ -30,11 +30,4 @@ RUN mkdir -p data cache/precomputed
 
 EXPOSE 8080
 
-# Use the image venv directly so startup does not re-resolve Python
-# CMD [".venv/bin/streamlit", "run", "streamlit-docker-test/app.py", \
-#      "--server.address=0.0.0.0", "--server.port=8080"]
 CMD ["sh", "-c", ".venv/bin/streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT --server.enableCORS=false"]
-# CMD .venv/bin/streamlit run streamlit-docker-test/app.py --server.address=0.0.0.0 --server.port=${PORT:-8080}
-# CMD .venv/bin/streamlit run streamlit-docker-test/app.py \
-#     --server.address=0.0.0.0 \
-#     --server.port=${PORT:-8501}

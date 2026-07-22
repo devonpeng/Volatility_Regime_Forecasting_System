@@ -1569,3 +1569,11 @@ Without `--force`, packing refuses to overwrite an archive and unpacking
 refuses to replace an existing destination or database. With `--force`,
 unpacking removes the destination tree and overwrites the database. Back up
 both locations before using that option.
+
+## 31. Known Issues and Planned Future Enhancements
+
+## 31. Known Issues and Planned Future Enhancements
+
+Currently, there are a few known limitations: while AI agent suggestions can be applied across pages in Streamlit, they may occasionally fail to take effect due to lifecycle limitations; actions such as `skip` or `stop` during the training process do not take immediate effect; the backend currently lacks support for ensemble models and their corresponding training workflows; and Streamlit relies excessively on session state variables, a mechanism that cannot be modified due to inherent framework constraints.
+
+For future enhancements, we plan to address these performance and architectural bottlenecks by migrating to a more professional frontend framework to improve presentation and responsiveness. Additionally, we will implement source-code level modifications or alternative execution mechanisms to allow model training runs to be cleanly interrupted, alongside significant improvements to exception support and error handling across the system.

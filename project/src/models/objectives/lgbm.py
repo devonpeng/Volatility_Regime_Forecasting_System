@@ -51,14 +51,12 @@ def objective_lgbm_classifier(
     random_state: int = 42,
     **kwargs,
 ) -> float:
-    # 限制 n_estimators 上限，高于 300 的树收益递减且训练耗时大
     n_estimators = trial.suggest_int("n_estimators", 150, 300, step=50)
     use_es = X.shape[0] > _ES_THRESHOLD
 
     lgbm_params = {
         "objective": "binary",
         "metric": "auc",
-        # lr 上限从 0.5 降到 0.3，减少方差并加快收敛
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
         "num_leaves": trial.suggest_int("num_leaves", 20, 60),
         "max_depth": trial.suggest_int("max_depth", 5, 12),
@@ -100,7 +98,6 @@ def objective_lgbm_classifier(
 
         callbacks = []
         if use_es:
-            # es 轮数从 50 降到 30，更快终止过拟合的训练
             callbacks.append(lgb.callback.early_stopping(stopping_rounds=30))
 
         gbm = _train_with_warn_once(
@@ -119,12 +116,9 @@ def objective_lgbm_classifier(
 
         auc_scores.append(float(fold_auc))
 
-        # ── 启用 Optuna Pruning ──────────────────────────────
-        # HyperbandPruner 需要每个 iteration 的 score 才能判断是否剪枝
         trial.report(float(fold_auc), step=fold_idx)
         if trial.should_prune():
             raise optuna.TrialPruned()
-        # ─────────────────────────────────────────────────────
 
     if not auc_scores:
         return 0.5
