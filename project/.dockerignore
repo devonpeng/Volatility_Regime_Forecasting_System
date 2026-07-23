@@ -17,10 +17,9 @@ venv
 # Ephemeral SQLite — recreated inside container
 data/workspaces.db
 
-# Precomputed data — whitelist the entire precomputed directory
+# Precomputed data — exclude cache/* but whitelist precomputed/
+cache/*
 !cache/precomputed/
-!cache/precomputed/**
-cache/
 
 # Optional local mirrors / caches not needed in production
 data/precomputed/
